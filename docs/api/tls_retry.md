@@ -1,5 +1,5 @@
-# `httplib.tls` and `httplib.retry`
+# `syshttp.tls` and `syshttp.retry`
 
-::: httplib.tls
+::: syshttp.tls
 
-::: httplib.retry
+::: syshttp.retry

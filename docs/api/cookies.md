@@ -1,3 +1,3 @@
-# `httplib.cookies`
+# `syshttp.cookies`
 
-::: httplib.cookies
+::: syshttp.cookies

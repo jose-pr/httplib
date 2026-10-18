@@ -1,3 +1,3 @@
-# `httplib.proxy`
+# `syshttp.proxy`
 
-::: httplib.proxy
+::: syshttp.proxy

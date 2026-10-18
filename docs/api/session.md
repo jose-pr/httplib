@@ -1,3 +1,3 @@
-# `httplib.session`
+# `syshttp.session`
 
-::: httplib.session
+::: syshttp.session

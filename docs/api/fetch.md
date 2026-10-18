@@ -1,3 +1,3 @@
-# `httplib.fetch`
+# `syshttp.fetch`
 
-::: httplib.fetch
+::: syshttp.fetch

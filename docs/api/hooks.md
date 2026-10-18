@@ -1,3 +1,3 @@
-# `httplib.hooks`
+# `syshttp.hooks`
 
-::: httplib.hooks
+::: syshttp.hooks
