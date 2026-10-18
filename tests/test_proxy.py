@@ -1,4 +1,4 @@
-"""httplib.proxy: AGENTS_PROXY wins, then HTTPS/HTTP/ALL_PROXY (either case).
+"""httplib.proxy: HTTPLIB_PROXY wins, then HTTPS/HTTP/ALL_PROXY (either case).
 
 No network. Run: `PYTHONPATH=src python -m pytest overlays/net/tests/`.
 """
@@ -9,7 +9,7 @@ from httplib import proxy as _proxy_module  # noqa: E402  (via conftest lib path
 
 # All proxy env vars proxy_url() consults, so a test can clear them wholesale.
 _ALL_VARS = [
-    "AGENTS_PROXY",
+    "HTTPLIB_PROXY",
     "HTTPS_PROXY",
     "https_proxy",
     "HTTP_PROXY",
@@ -24,9 +24,9 @@ def _clear(monkeypatch):
         monkeypatch.delenv(v, raising=False)
 
 
-def test_agents_proxy_wins_over_everything(monkeypatch):
+def test_httplib_proxy_wins_over_everything(monkeypatch):
     _clear(monkeypatch)
-    monkeypatch.setenv("AGENTS_PROXY", "http://agent:1/")
+    monkeypatch.setenv("HTTPLIB_PROXY", "http://agent:1/")
     monkeypatch.setenv("HTTPS_PROXY", "http://https:2/")
     monkeypatch.setenv("HTTP_PROXY", "http://http:3/")
     monkeypatch.setenv("ALL_PROXY", "http://all:4/")
@@ -62,5 +62,5 @@ def test_none_when_unset(monkeypatch):
 
 def test_proxies_dict_shape(monkeypatch):
     _clear(monkeypatch)
-    monkeypatch.setenv("AGENTS_PROXY", "http://p:1/")
+    monkeypatch.setenv("HTTPLIB_PROXY", "http://p:1/")
     assert _proxy_module.proxies_from_env() == {"http": "http://p:1/", "https": "http://p:1/"}

@@ -1,4 +1,4 @@
-"""AGENTS_PROXY_AUTH_HEADER names the header the proxy credential rides in;
+"""HTTPLIB_PROXY_AUTH_HEADER names the header the proxy credential rides in;
 httplib's typing imports requests only under TYPE_CHECKING."""
 
 import subprocess
@@ -14,20 +14,15 @@ from test_proxy_auth import BEARER, _clean_env  # noqa: F401
 SRC = Path(__file__).resolve().parents[1] / "src"
 
 
-@pytest.fixture(autouse=True)
-def _no_shim_switch(monkeypatch):
-    monkeypatch.delenv(agent_proxy.AUTH_HEADER_VAR, raising=False)
-
-
 def test_auth_header_name_defaults_and_validates(monkeypatch):
     assert agent_proxy.auth_header() == "Proxy-Authorization"
-    monkeypatch.setenv("AGENTS_PROXY_AUTH_HEADER", " X-Proxy-Token ")
+    monkeypatch.setenv("HTTPLIB_PROXY_AUTH_HEADER", " X-Proxy-Token ")
     assert agent_proxy.auth_header() == "X-Proxy-Token"
-    monkeypatch.setenv("AGENTS_PROXY_AUTH_HEADER", "")
+    monkeypatch.setenv("HTTPLIB_PROXY_AUTH_HEADER", "")
     assert agent_proxy.auth_header() == "Proxy-Authorization"
     for bad in ("X-Token: x", "two words"):
-        monkeypatch.setenv("AGENTS_PROXY_AUTH_HEADER", bad)
-        with pytest.raises(ValueError, match="AGENTS_PROXY_AUTH_HEADER"):
+        monkeypatch.setenv("HTTPLIB_PROXY_AUTH_HEADER", bad)
+        with pytest.raises(ValueError, match="HTTPLIB_PROXY_AUTH_HEADER"):
             agent_proxy.auth_header()
 
 
@@ -35,7 +30,7 @@ def test_session_uses_the_configured_header_name(origin, gateway, monkeypatch):
     pytest.importorskip("requests")
     from httplib.session import new_session
 
-    monkeypatch.setenv("AGENTS_PROXY_AUTH_HEADER", "X-Proxy-Token")
+    monkeypatch.setenv("HTTPLIB_PROXY_AUTH_HEADER", "X-Proxy-Token")
     session = new_session(retries=0)
     # connect: the hook that feeds the plain-http request and the CONNECT
     adapter = session.get_adapter("https://api.example.com/")

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Tuple, Union
 
 from .auth import AuthProvider
+from .env import HTTPEnv
 from .jar import CookieJar, TokenJar
 from .session import new_session
 
@@ -123,6 +124,7 @@ def request_text_auto(
     cookies: Union[bool, str, CookieJar] = False,
     tokens: Union[bool, str, TokenJar] = False,
     auth_provider: Optional[AuthProvider] = None,
+    env: Optional[HTTPEnv] = None,
     headers: Optional[Dict[str, str]] = None,
     data: Any = None,
     json_body: Any = None,
@@ -139,6 +141,7 @@ def request_text_auto(
             cookies=cookies,
             tokens=tokens,
             auth_provider=auth_provider,
+            env=env,
         )
     return request_text(
         session,
@@ -165,6 +168,7 @@ def request_json_auto(
     cookies: Union[bool, str, CookieJar] = False,
     tokens: Union[bool, str, TokenJar] = False,
     auth_provider: Optional[AuthProvider] = None,
+    env: Optional[HTTPEnv] = None,
     headers: Optional[Dict[str, str]] = None,
     data: Any = None,
     json_body: Any = None,
@@ -181,6 +185,7 @@ def request_json_auto(
             cookies=cookies,
             tokens=tokens,
             auth_provider=auth_provider,
+            env=env,
         )
     return request_json(
         session,

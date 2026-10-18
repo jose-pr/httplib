@@ -1,5 +1,5 @@
 """What counts as transient -- the one list the requests session's
-``Retry`` and the curl fallback's ``--retry`` both use. Dependency-free."""
+``Retry`` and a curl front end's ``--retry`` both use. Dependency-free."""
 
 from __future__ import annotations
 

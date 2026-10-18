@@ -1,5 +1,5 @@
 """The OS trust store as an ``SSLContext`` -- what the requests session
-(``session``) and the curl fallback (``cli``) both verify servers against.
+(``session``) and a curl front end both verify servers against.
 ``ssl.create_default_context()`` loads the certificate store on Windows and
 OpenSSL's system defaults elsewhere (``SSL_CERT_FILE`` / ``SSL_CERT_DIR``
 included), so no ``certifi`` bundle is involved. Dependency-free."""

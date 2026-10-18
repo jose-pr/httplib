@@ -116,8 +116,8 @@ def origin():
 @pytest.fixture()
 def proxy(monkeypatch):
     httpd = _serve(_Proxy, OTHER_HOST)
-    monkeypatch.setenv("AGENTS_PROXY", "http://%s:%d" % (OTHER_HOST, httpd.server_address[1]))
-    monkeypatch.setenv("AGENTS_PROXY_AUTH", BEARER)
+    monkeypatch.setenv("HTTPLIB_PROXY", "http://%s:%d" % (OTHER_HOST, httpd.server_address[1]))
+    monkeypatch.setenv("HTTPLIB_PROXY_AUTH", BEARER)
     try:
         yield
     finally:
@@ -128,9 +128,9 @@ def proxy(monkeypatch):
 @pytest.fixture()
 def gateway(monkeypatch):
     httpd = _serve(_Gateway, OTHER_HOST)
-    monkeypatch.setenv("AGENTS_PROXY", "http://%s:%d" % (OTHER_HOST, httpd.server_address[1]))
-    monkeypatch.setenv("AGENTS_PROXY_TYPE", "prefix:/fetch/")
-    monkeypatch.setenv("AGENTS_PROXY_AUTH", BEARER)
+    monkeypatch.setenv("HTTPLIB_PROXY", "http://%s:%d" % (OTHER_HOST, httpd.server_address[1]))
+    monkeypatch.setenv("HTTPLIB_PROXY_TYPE", "prefix:/fetch/")
+    monkeypatch.setenv("HTTPLIB_PROXY_AUTH", BEARER)
     try:
         yield
     finally:

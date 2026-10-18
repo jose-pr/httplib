@@ -1,4 +1,4 @@
-"""Build a configured ``requests.Session`` with retry/backoff, the agent proxy
+"""Build a configured ``requests.Session`` with retry/backoff, the configured proxy
 (credential, kind and ``NO_PROXY`` bypass, all decided in ONE adapter), and
 transparent cookie/token load-save + per-host auth.
 
@@ -11,7 +11,7 @@ comes back is attributed to the origin again (``response.url``,
 already names a scheme), never a session header, so it cannot leak to another
 host; an explicit header or ``auth=`` wins.
 
-URL hooks (``NET_HOOKS_<KEY>`` + ``_PY``, see :mod:`.hooks`) run in the
+URL hooks (``<P>_HOOKS_<KEY>`` + ``_PY``, see :mod:`.hooks`) run in the
 same place, on the caller's URL, before the request: a hook may log in, set
 headers in the request's kwargs, or return a response of its own. A hook
 that makes requests through the session does not trigger hooks again.
@@ -38,6 +38,7 @@ from urllib.parse import urlparse
 from . import hooks as _hooks
 from .auth import AuthProvider
 from .cookies import CookieSpec, apply_to_session, domain_covers, merge_set_cookie_headers
+from .env import HTTPEnv
 from .jar import CookieJar, FileCookieJar, FileTokenJar, TokenJar
 from .retry import TRANSIENT_STATUSES
 from .tls import OS_CONTEXT_MAX_AGE, os_ssl_context  # noqa: F401  (re-exported: session's own API)
@@ -64,7 +65,7 @@ def _import_requests():
     return requests, HTTPAdapter, Retry
 
 
-def _agent_proxy_adapter_class(HTTPAdapter):
+def _proxy_adapter_class(HTTPAdapter):
     """The one adapter that owns every proxy decision, built lazily on the
     lazily imported ``HTTPAdapter``. ``HTTPAdapter.send(request, proxies=...)``
     is the single point every request -- ``session.get``, a bare
@@ -73,7 +74,7 @@ def _agent_proxy_adapter_class(HTTPAdapter):
     the last two."""
     from requests.cookies import RequestsCookieJar, extract_cookies_to_jar
 
-    class AgentProxyAdapter(HTTPAdapter):
+    class ProxyAdapter(HTTPAdapter):
         """``proxy`` (userinfo-free URL) + ``authorization`` (the
         ``Proxy-Authorization`` value) + ``endpoint`` (``None`` for a
         ``connect`` proxy, the ``/endpoint`` of a prefix gateway).
@@ -81,7 +82,7 @@ def _agent_proxy_adapter_class(HTTPAdapter):
         * ``NO_PROXY`` hosts go direct, and never see the credential.
         * ``connect``: the proxy is passed EXPLICITLY per request, so the global
           ``HTTP_PROXY``/``HTTPS_PROXY`` that ``trust_env`` would otherwise merge
-          in cannot win over the agent proxy -- and the credential is added by
+          in cannot win over the configured proxy -- and the credential is added by
           ``proxy_headers`` only for THIS proxy, so it can never reach another.
           That hook covers the plain-http request and the https ``CONNECT``; a
           header on the session would reach the origin inside the tunnel instead.
@@ -102,9 +103,11 @@ def _agent_proxy_adapter_class(HTTPAdapter):
             authorization: Optional[str] = None,
             endpoint: Optional[str] = None,
             auth_header: Optional[str] = None,
+            env: Optional[HTTPEnv] = None,
             **kwargs: Any,
         ) -> None:
             super().__init__(**kwargs)
+            self.env = env
             self.proxy = proxy
             self.authorization = authorization
             self.endpoint = endpoint
@@ -145,7 +148,7 @@ def _agent_proxy_adapter_class(HTTPAdapter):
             original = request.url or ""
             caller_request = request
             request = request.copy()
-            if _proxy.should_bypass(original):
+            if _proxy.should_bypass(original, env=self.env):
                 kwargs["proxies"] = {}
                 return super().send(request, **kwargs)
             if self.endpoint is None:
@@ -172,7 +175,7 @@ def _agent_proxy_adapter_class(HTTPAdapter):
             response.cookies = jar
             return response
 
-    return AgentProxyAdapter
+    return ProxyAdapter
 
 
 def new_session(
@@ -186,7 +189,12 @@ def new_session(
     cookies: Union[bool, str, "CookieJar"] = False,
     tokens: Union[bool, str, "TokenJar"] = False,
     auth_provider: Optional["AuthProvider"] = None,
+    env: Optional[HTTPEnv] = None,
 ) -> "requests.Session":
+    """A ``requests.Session`` configured as the module docstring says.
+    ``env`` -- where proxy, jar and hook settings are read
+    (:class:`~httplib.env.HTTPEnv`, default ``HTTPEnv()``)."""
+    env = HTTPEnv() if env is None else env
     disable_insecure_request_warnings()
     # Not `requests`: that name is the TYPE_CHECKING import the annotations
     # below refer to, and a local of the same name would shadow it.
@@ -195,10 +203,10 @@ def new_session(
     cookie_jar: Optional[CookieJar] = None
     cookie_key: Optional[str] = None
     if cookies is True:
-        cookie_jar = FileCookieJar()
+        cookie_jar = FileCookieJar(env=env)
         cookie_key = "__by_host__"
     elif isinstance(cookies, str):
-        cookie_jar = FileCookieJar()
+        cookie_jar = FileCookieJar(env=env)
         cookie_key = cookies
     elif cookies is not None and cookies is not False:
         # `is not`, not truthiness: an empty MemoryCookieJar is a jar.
@@ -207,10 +215,10 @@ def new_session(
     token_jar: Optional[TokenJar] = None
     token_key: Optional[str] = None
     if tokens is True:
-        token_jar = FileTokenJar()
+        token_jar = FileTokenJar(env=env)
         token_key = "__by_host__"
     elif isinstance(tokens, str):
-        token_jar = FileTokenJar()
+        token_jar = FileTokenJar(env=env)
         token_key = tokens
     elif tokens is not None and tokens is not False:
         token_jar = tokens
@@ -224,22 +232,23 @@ def new_session(
     authorization: Optional[str] = None
     endpoint: Optional[str] = None
     if proxies is None:
-        planned = _proxy.plan()  # the decision the curl fallback makes too
+        planned = _proxy.plan(env=env)  # the decision a curl front end makes too
         if planned is not None:
             proxy_url, authorization, endpoint = planned.proxy, planned.authorization, planned.endpoint
     else:
         # Caller-supplied proxies are requests' business (userinfo included);
-        # the configured credential still applies if one of them IS the agent proxy.
+        # the configured credential still applies if one of them IS the configured proxy.
         session.proxies = proxies
-        configured = _proxy.resolve()
+        configured = _proxy.resolve(env=env)
         if configured:
-            proxy_url, authorization = configured[0], _proxy.configured_authorization()
+            proxy_url, authorization = configured[0], _proxy.configured_authorization(env=env)
             proxy_url = proxy_url if proxy_url in proxies.values() else None
-    adapter = _agent_proxy_adapter_class(HTTPAdapter)(
+    adapter = _proxy_adapter_class(HTTPAdapter)(
         proxy=proxy_url,
         authorization=authorization,
         endpoint=endpoint,
-        auth_header=_proxy.auth_header(),
+        auth_header=_proxy.auth_header(env=env),
+        env=env,
         max_retries=retry_strategy,
     )
     session.mount("http://", adapter)
@@ -356,7 +365,7 @@ def new_session(
         if not _in_hook:
             _in_hook = True
             try:
-                hooked = _hooks.call_py_hooks(session, method, url, kwargs)
+                hooked = _hooks.call_py_hooks(session, method, url, kwargs, env=env)
             finally:
                 _in_hook = False
             if hooked is not None:
