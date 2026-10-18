@@ -2,6 +2,7 @@
 cookie merging. The requests-free half (``CookieSpec``, ``load_netscape``,
 ``save_netscape``, ``cookie_applies``, ``set_cookie_specs``) is what the curl
 fallback's ``-b`` / ``-c`` run on."""
+
 from __future__ import annotations
 
 import ipaddress
@@ -62,7 +63,7 @@ def load_netscape(path: Path) -> List[CookieSpec]:
         domain, flag, cpath, secure, expires, name, value = parts[:7]
         http_only = domain.startswith(HTTP_ONLY_PREFIX)
         if http_only:
-            domain = domain[len(HTTP_ONLY_PREFIX):]
+            domain = domain[len(HTTP_ONLY_PREFIX) :]
         cookies.append(
             CookieSpec(
                 domain=domain,
@@ -175,8 +176,12 @@ def apply_to_session(session: "requests.Session", cookies: Iterable[CookieSpec])
     for c in cookies:
         try:
             session.cookies.set(
-                c.name, c.value, domain=c.domain, path=c.path,
-                secure=bool(c.secure), expires=c.expires or None,
+                c.name,
+                c.value,
+                domain=c.domain,
+                path=c.path,
+                secure=bool(c.secure),
+                expires=c.expires or None,
             )
         except Exception:
             continue
@@ -208,10 +213,7 @@ def save_netscape(session_cookies: "Iterable[CookieLike]", path: Path) -> None:
         value = getattr(cookie, "value", "")
         if not name:
             continue
-        lines.append(
-            "%s\t%s\t%s\t%s\t%s\t%s\t%s\n"
-            % (domain, flag, cpath, secure, expires, name, value)
-        )
+        lines.append("%s\t%s\t%s\t%s\t%s\t%s\t%s\n" % (domain, flag, cpath, secure, expires, name, value))
     path.write_text("".join(lines), encoding="utf-8")
 
 

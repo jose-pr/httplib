@@ -2,6 +2,7 @@
 bundle: `verify=True` pools get the shared OS `SSLContext` and no CA file;
 `verify=False` and an explicit bundle stay requests' business. No network.
 """
+
 import ssl
 
 import pytest
@@ -23,9 +24,7 @@ def test_verify_true_https_pools_get_the_os_context():
     adapter = _adapter()
     if not hasattr(requests.adapters.HTTPAdapter, "build_connection_pool_key_attributes"):
         pytest.skip("requests < 2.32.2 builds its pools without this hook")
-    _host, kwargs = adapter.build_connection_pool_key_attributes(
-        _prepared("https://example.com/"), True, None
-    )
+    _host, kwargs = adapter.build_connection_pool_key_attributes(_prepared("https://example.com/"), True, None)
     assert kwargs["ssl_context"] is httplib_session.os_ssl_context()
     assert kwargs["cert_reqs"] == "CERT_REQUIRED"
     assert "ca_certs" not in kwargs and "ca_cert_dir" not in kwargs
@@ -38,9 +37,7 @@ def test_other_verify_values_never_share_the_os_context(verify):
     adapter = _adapter()
     if not hasattr(requests.adapters.HTTPAdapter, "build_connection_pool_key_attributes"):
         pytest.skip("requests < 2.32.2 builds its pools without this hook")
-    _host, kwargs = adapter.build_connection_pool_key_attributes(
-        _prepared("https://example.com/"), verify, None
-    )
+    _host, kwargs = adapter.build_connection_pool_key_attributes(_prepared("https://example.com/"), verify, None)
     assert kwargs.get("ssl_context") is not httplib_session.os_ssl_context()
 
 

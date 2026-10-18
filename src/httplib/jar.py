@@ -7,6 +7,7 @@ Jars live under the configured store, not a hardcoded ``~/.agents``:
 
 Token values are secrets: this module never logs or prints them.
 """
+
 from __future__ import annotations
 
 import os

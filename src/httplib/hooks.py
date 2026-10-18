@@ -39,6 +39,7 @@ the first returning a response ends the chain; the shim runs the first
 ``_CURL`` in that order. A pattern that does not compile is a configuration
 error (``ValueError`` naming the KEY) the first time it would be consulted.
 """
+
 from __future__ import annotations
 
 import importlib
@@ -79,7 +80,11 @@ class Hook(object):
 
     def __repr__(self) -> str:
         return "Hook(%s, %r%s%s)" % (
-            self.key, self.pattern.pattern, ", curl" if self.curl else "", ", py" if self.py else "")
+            self.key,
+            self.pattern.pattern,
+            ", curl" if self.curl else "",
+            ", py" if self.py else "",
+        )
 
 
 def hooks_from_env(environ: "Optional[Dict[str, str]]" = None) -> List[Hook]:
@@ -90,7 +95,7 @@ def hooks_from_env(environ: "Optional[Dict[str, str]]" = None) -> List[Hook]:
     for name in sorted(env):
         if not name.startswith(PREFIX) or name.endswith((CURL_SUFFIX, PY_SUFFIX)):
             continue
-        key = name[len(PREFIX):]
+        key = name[len(PREFIX) :]
         if not key or not env[name]:
             continue
         try:
@@ -148,7 +153,10 @@ def load_callable(spec: str) -> "PyHook":
 
 
 def call_py_hooks(
-    session: "requests.Session", method: str, url: str, kwargs: Dict[str, Any],
+    session: "requests.Session",
+    method: str,
+    url: str,
+    kwargs: Dict[str, Any],
     environ: Optional[Dict[str, str]] = None,
 ) -> "Optional[requests.Response]":
     """Run every ``_PY`` hook matching ``url`` in order; the first non-None

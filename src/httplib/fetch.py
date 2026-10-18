@@ -1,4 +1,5 @@
 """Text/JSON request helpers and a retry-once-on-auth-failure wrapper."""
+
 from __future__ import annotations
 
 import json

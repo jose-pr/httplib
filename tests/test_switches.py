@@ -1,5 +1,6 @@
 """AGENTS_PROXY_AUTH_HEADER names the header the proxy credential rides in;
 httplib's typing imports requests only under TYPE_CHECKING."""
+
 import subprocess
 import sys
 from pathlib import Path
@@ -63,7 +64,13 @@ def test_httplib_type_checks_clean():
     """The annotations hold: mypy over src/httplib reports nothing (skipped
     where mypy is not installed)."""
     mypy_api = pytest.importorskip("mypy.api")
-    out, err, rc = mypy_api.run([
-        "--python-version", "3.10", "--ignore-missing-imports", "--no-error-summary", str(SRC / "httplib"),
-    ])
+    out, err, rc = mypy_api.run(
+        [
+            "--python-version",
+            "3.10",
+            "--ignore-missing-imports",
+            "--no-error-summary",
+            str(SRC / "httplib"),
+        ]
+    )
     assert rc == 0, out + err

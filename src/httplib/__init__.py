@@ -24,6 +24,14 @@ Public surface (see the package's AGENTS.md):
 dependency-free; ``session``/``fetch`` import ``requests`` lazily (the
 ``session`` extra).
 """
+
 from .proxy import (  # noqa: F401
-    prefix_url, proxies_from_env, proxy_authorization, proxy_type, proxy_url, redact, resolve, should_bypass,
+    prefix_url,
+    proxies_from_env,
+    proxy_authorization,
+    proxy_type,
+    proxy_url,
+    redact,
+    resolve,
+    should_bypass,
 )

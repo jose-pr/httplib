@@ -41,12 +41,14 @@ that prints a proxy URL goes through :func:`redact`.
 or ``*``) is honoured the same way curl and ``requests`` read it, so a loopback
 test server or an internal host is not sent to the proxy: :func:`should_bypass`.
 """
+
 from __future__ import annotations
 
 import base64
 import os
 from typing import Optional, Tuple
 from urllib.parse import unquote, urlsplit, urlunsplit
+
 # The stdlib's own NO_PROXY matcher (what urllib and requests use); absent
 # from typeshed.
 from urllib.request import proxy_bypass_environment  # type: ignore[attr-defined]
@@ -62,9 +64,12 @@ TYPE_VAR = "AGENTS_PROXY_TYPE"
 
 # Fallback order after AGENTS_PROXY, both cases (curl reads lowercase per httpoxy).
 _FALLBACK_VARS = (
-    "HTTPS_PROXY", "https_proxy",
-    "HTTP_PROXY", "http_proxy",
-    "ALL_PROXY", "all_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "ALL_PROXY",
+    "all_proxy",
 )
 
 
@@ -185,9 +190,7 @@ def proxy_type() -> Tuple[str, Optional[str]]:
     if kind == "connect":
         return "connect", None
     if kind != "prefix":
-        raise ValueError(
-            "%s must be 'connect' or 'prefix[:/endpoint]', not %r" % (TYPE_VAR, raw)
-        )
+        raise ValueError("%s must be 'connect' or 'prefix[:/endpoint]', not %r" % (TYPE_VAR, raw))
     endpoint = endpoint.strip() or "/"
     if not endpoint.startswith("/"):
         endpoint = "/" + endpoint
@@ -270,8 +273,12 @@ class ProxyPlan:
     __slots__ = ("proxy", "authorization", "endpoint", "no_proxy", "auth_header")
 
     def __init__(
-        self, proxy: str, authorization: Optional[str], endpoint: Optional[str],
-        no_proxy: Optional[str], auth_header: Optional[str] = None,
+        self,
+        proxy: str,
+        authorization: Optional[str],
+        endpoint: Optional[str],
+        no_proxy: Optional[str],
+        auth_header: Optional[str] = None,
     ) -> None:
         self.proxy = proxy
         self.authorization = authorization
@@ -290,7 +297,9 @@ class ProxyPlan:
 
 
 def plan(
-    proxy: Optional[str] = None, noproxy: Optional[str] = None, proxy_user: Optional[str] = None,
+    proxy: Optional[str] = None,
+    noproxy: Optional[str] = None,
+    proxy_user: Optional[str] = None,
 ) -> Optional[ProxyPlan]:
     """The :class:`ProxyPlan` for a request, or ``None`` for direct.
 

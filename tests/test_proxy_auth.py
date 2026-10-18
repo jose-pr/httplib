@@ -7,6 +7,7 @@ right Proxy-Authorization and never forwards -- a body of ``via-proxy`` proves
 the request went through it with the credential, ``via-gateway`` that it went to
 the prefix gateway, ``hello`` that it went direct.
 """
+
 import base64
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -16,9 +17,18 @@ import pytest
 from httplib import proxy as agent_proxy
 
 _ALL_VARS = [
-    "AGENTS_PROXY", "AGENTS_PROXY_AUTH", "AGENTS_PROXY_TYPE", "HTTP_PROXY_AUTH",
-    "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy",
-    "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy",
+    "AGENTS_PROXY",
+    "AGENTS_PROXY_AUTH",
+    "AGENTS_PROXY_TYPE",
+    "HTTP_PROXY_AUTH",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+    "NO_PROXY",
+    "no_proxy",
 ]
 
 BASIC = "Basic " + base64.b64encode(b"agent:s3cret").decode()
@@ -150,6 +160,7 @@ def gateway():
 # httplib.proxy: the header value, its sources, redaction, kind, bypass
 # --------------------------------------------------------------------------
 
+
 def test_agents_proxy_auth_is_the_header_value_verbatim(monkeypatch):
     monkeypatch.setenv("AGENTS_PROXY", "http://proxy.example:3128")
     monkeypatch.setenv("AGENTS_PROXY_AUTH", BEARER)
@@ -213,7 +224,10 @@ def test_proxy_type_parsing(monkeypatch):
 def test_prefix_url_is_proxy_endpoint_url(monkeypatch):
     monkeypatch.setenv("AGENTS_PROXY", "https://agent:s3cret@gw.example/")
     monkeypatch.setenv("AGENTS_PROXY_TYPE", "prefix:/fetch/")
-    assert agent_proxy.prefix_url("https://api.example.com/x?q=1") == "https://gw.example/fetch/https://api.example.com/x?q=1"
+    assert (
+        agent_proxy.prefix_url("https://api.example.com/x?q=1")
+        == "https://gw.example/fetch/https://api.example.com/x?q=1"
+    )
     monkeypatch.setenv("AGENTS_PROXY_TYPE", "prefix")
     assert agent_proxy.prefix_url("https://api.example.com/x") == "https://gw.example/https://api.example.com/x"
 
@@ -234,6 +248,7 @@ def test_no_proxy_bypass(monkeypatch):
 # --------------------------------------------------------------------------
 # requests session: same credential, same kind, same bypass
 # --------------------------------------------------------------------------
+
 
 def test_session_sends_the_configured_header_to_the_proxy(target, proxy, monkeypatch):
     pytest.importorskip("requests")
@@ -302,6 +317,7 @@ def test_session_prefix_gateway(target, gateway, monkeypatch):
 # A bad AGENTS_PROXY_TYPE is a configuration error, reported as such
 # --------------------------------------------------------------------------
 
+
 def test_bad_type_is_harmless_without_a_proxy(monkeypatch):
     monkeypatch.setenv("AGENTS_PROXY_TYPE", "socks5")
     assert agent_proxy.plan() is None
@@ -319,6 +335,7 @@ def test_bad_type_with_a_proxy(monkeypatch):
 # --------------------------------------------------------------------------
 # Redirects: every hop is re-decided; the credential never reaches an origin
 # --------------------------------------------------------------------------
+
 
 def test_session_redirect_hop_stays_on_the_proxy_and_bypass_is_per_hop(target, proxy, monkeypatch):
     pytest.importorskip("requests")

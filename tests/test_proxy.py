@@ -2,6 +2,7 @@
 
 No network. Run: `PYTHONPATH=src python -m pytest overlays/net/tests/`.
 """
+
 import importlib
 
 from httplib import proxy as _proxy_module  # noqa: E402  (via conftest lib path)
@@ -9,9 +10,12 @@ from httplib import proxy as _proxy_module  # noqa: E402  (via conftest lib path
 # All proxy env vars proxy_url() consults, so a test can clear them wholesale.
 _ALL_VARS = [
     "AGENTS_PROXY",
-    "HTTPS_PROXY", "https_proxy",
-    "HTTP_PROXY", "http_proxy",
-    "ALL_PROXY", "all_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "ALL_PROXY",
+    "all_proxy",
 ]
 
 

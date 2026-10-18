@@ -27,6 +27,7 @@ requests.
 ``session`` extra). ``new_session`` imports them lazily and raises a clear,
 actionable error if they are absent; every other module works without them.
 """
+
 from __future__ import annotations
 
 import re
@@ -40,6 +41,7 @@ from .cookies import CookieSpec, apply_to_session, domain_covers, merge_set_cook
 from .jar import CookieJar, FileCookieJar, FileTokenJar, TokenJar
 from .retry import TRANSIENT_STATUSES
 from .tls import OS_CONTEXT_MAX_AGE, os_ssl_context  # noqa: F401  (re-exported: session's own API)
+
 # The module, not its functions: `should_bypass`'s default sentinel belongs
 # to the module instance, and a function bound by name before a reload
 # would pass a stale one.
@@ -58,13 +60,8 @@ def _import_requests():
         from requests.adapters import HTTPAdapter
         from urllib3.util.retry import Retry
     except ImportError as exc:  # pragma: no cover - exercised via message assert
-        raise ImportError(
-            "httplib.session needs 'requests' (with urllib3): "
-            "pip install 'httplib[session]'"
-        ) from exc
+        raise ImportError("httplib.session needs 'requests' (with urllib3): " "pip install 'httplib[session]'") from exc
     return requests, HTTPAdapter, Retry
-
-
 
 
 def _agent_proxy_adapter_class(HTTPAdapter):
@@ -99,8 +96,13 @@ def _agent_proxy_adapter_class(HTTPAdapter):
         """
 
         def __init__(
-            self, *, proxy: Optional[str] = None, authorization: Optional[str] = None,
-            endpoint: Optional[str] = None, auth_header: Optional[str] = None, **kwargs: Any,
+            self,
+            *,
+            proxy: Optional[str] = None,
+            authorization: Optional[str] = None,
+            endpoint: Optional[str] = None,
+            auth_header: Optional[str] = None,
+            **kwargs: Any,
         ) -> None:
             super().__init__(**kwargs)
             self.proxy = proxy
@@ -115,9 +117,7 @@ def _agent_proxy_adapter_class(HTTPAdapter):
             for ``verify=True`` -- urllib3 writes a pool's ``cert_reqs`` into
             the context it is given, so a ``verify=False`` pool must never
             share it."""
-            host_params, pool_kwargs = super().build_connection_pool_key_attributes(
-                request, verify, cert
-            )
+            host_params, pool_kwargs = super().build_connection_pool_key_attributes(request, verify, cert)
             if verify is True and host_params.get("scheme") == "https":
                 pool_kwargs["ssl_context"] = os_ssl_context()
             return host_params, pool_kwargs
@@ -236,8 +236,11 @@ def new_session(
             proxy_url, authorization = configured[0], _proxy.configured_authorization()
             proxy_url = proxy_url if proxy_url in proxies.values() else None
     adapter = _agent_proxy_adapter_class(HTTPAdapter)(
-        proxy=proxy_url, authorization=authorization, endpoint=endpoint,
-        auth_header=_proxy.auth_header(), max_retries=retry_strategy,
+        proxy=proxy_url,
+        authorization=authorization,
+        endpoint=endpoint,
+        auth_header=_proxy.auth_header(),
+        max_retries=retry_strategy,
     )
     session.mount("http://", adapter)
     session.mount("https://", adapter)
@@ -359,11 +362,7 @@ def new_session(
             if hooked is not None:
                 return hooked
         authorization = _authorization_for(url)
-        if (
-            authorization
-            and not kwargs.get("auth")
-            and not _has_header(session.headers, "authorization")
-        ):
+        if authorization and not kwargs.get("auth") and not _has_header(session.headers, "authorization"):
             headers = dict(kwargs.get("headers") or {})
             if not _has_header(headers, "authorization"):
                 headers["Authorization"] = authorization

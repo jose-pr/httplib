@@ -6,6 +6,7 @@ and files what comes back under the origin again.
 Loopback only: the origin listens on 127.0.0.1, the proxy and the gateway on
 127.0.0.2, so a jar keyed by host can tell them apart.
 """
+
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -138,9 +139,13 @@ def gateway(monkeypatch):
 
 
 def _jars(token="tok123"):
-    cookies = MemoryCookieJar({ORIGIN_HOST: [
-        CookieSpec(domain=ORIGIN_HOST, path="/", secure=False, expires=None, name="pre", value="1"),
-    ]})
+    cookies = MemoryCookieJar(
+        {
+            ORIGIN_HOST: [
+                CookieSpec(domain=ORIGIN_HOST, path="/", secure=False, expires=None, name="pre", value="1"),
+            ]
+        }
+    )
     tokens = MemoryTokenJar({ORIGIN_HOST: token, OTHER_HOST: "never-this-one"})
     return cookies, tokens
 
@@ -223,5 +228,3 @@ def test_explicit_authorization_and_a_scheme_bearing_token(origin, gateway):
     assert _Gateway.seen[-1][1].get("Authorization") == "token abc123", "a scheme is kept verbatim"
     session.get(origin + "/x", headers={"Authorization": "Basic explicit"}, timeout=5)
     assert _Gateway.seen[-1][1].get("Authorization") == "Basic explicit", "the caller's header wins"
-
-

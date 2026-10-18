@@ -1,5 +1,6 @@
 """What counts as transient -- the one list the requests session's
 ``Retry`` and the curl fallback's ``--retry`` both use. Dependency-free."""
+
 from __future__ import annotations
 
 import email.utils

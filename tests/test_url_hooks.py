@@ -3,6 +3,7 @@ Python callable with the session -- under a prefix gateway too, where the
 wire URL is the gateway's and must not be what is matched. The ``_CURL``
 target is parsed here and run by a curl front end.
 """
+
 import json
 import os
 import sys
@@ -59,14 +60,19 @@ def _no_ambient_hooks(monkeypatch):
 
 def test_hooks_from_env_key_order_targets_and_skip():
     env = {
-        "NET_HOOKS_B": r"^https://b\.example/", "NET_HOOKS_B_PY": "m:f",
-        "NET_HOOKS_A": r"example", "NET_HOOKS_A_CURL": "/usr/bin/wrap",
+        "NET_HOOKS_B": r"^https://b\.example/",
+        "NET_HOOKS_B_PY": "m:f",
+        "NET_HOOKS_A": r"example",
+        "NET_HOOKS_A_CURL": "/usr/bin/wrap",
         "NET_HOOKS_A_PY": "m:g",
-        "NET_HOOKS_NOTARGET": r".*",              # nothing to run: ignored
-        "NET_HOOKS_ORPHAN_CURL": "/x",            # no pattern: ignored
-        "NET_HOOKS_EMPTY": "", "NET_HOOKS_EMPTY_PY": "m:f",
+        "NET_HOOKS_NOTARGET": r".*",  # nothing to run: ignored
+        "NET_HOOKS_ORPHAN_CURL": "/x",  # no pattern: ignored
+        "NET_HOOKS_EMPTY": "",
+        "NET_HOOKS_EMPTY_PY": "m:f",
         # A hook run's own exports (singular NET_HOOK_): a different prefix, not hooks.
-        "NET_HOOK_URL": "https://b.example/x", "NET_HOOK_KEY": "A", "NET_HOOK_SKIP": "",
+        "NET_HOOK_URL": "https://b.example/x",
+        "NET_HOOK_KEY": "A",
+        "NET_HOOK_SKIP": "",
     }
     found = hooks.hooks_from_env(env)
     assert [h.key for h in found] == ["A", "B"]
@@ -172,5 +178,3 @@ def test_py_hooks_run_in_key_order_first_answer_wins(origin, gateway, monkeypatc
     monkeypatch.setenv("NET_HOOKS_C_PY", "test_url_hooks:reentrant")
     resp = _session().get(origin + "/x", timeout=5)
     assert resp.text == "from-hook" and CALLS == [("GET", origin + "/x")]
-
-

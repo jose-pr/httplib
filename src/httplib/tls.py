@@ -3,6 +3,7 @@
 ``ssl.create_default_context()`` loads the certificate store on Windows and
 OpenSSL's system defaults elsewhere (``SSL_CERT_FILE`` / ``SSL_CERT_DIR``
 included), so no ``certifi`` bundle is involved. Dependency-free."""
+
 from __future__ import annotations
 
 import ssl
