@@ -38,6 +38,9 @@ dependencies = [
 # requests backs httplib.session and httplib.fetch only, imported when a
 # session is built; importing httplib never needs it. urllib3 comes with it.
 session = ["requests>=2.25,<3"]
+# A JavaScript engine for PAC scripts proxylib evaluates itself (Linux without
+# libproxy); Windows and macOS evaluate PAC in the OS.
+pac = ["proxylib[quickjs]>=1.0,<2"]
 # The tests exercise every extra, so dev refers to them rather than repeating
 # their ranges.
 dev = ["httplib[session]", "build", "pytest", "black", "mypy<2", "types-requests"]

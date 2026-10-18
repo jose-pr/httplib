@@ -6,7 +6,11 @@ import pytest
 @pytest.fixture(autouse=True)
 def _no_ambient_settings(monkeypatch):
     """No test sees an HTTPLIB_* variable of the machine running it --
-    HTTPLIB_PREFIX included, which would rename every other setting."""
+    HTTPLIB_PREFIX included, which would rename every other setting -- nor the
+    machine's system proxy configuration (tests that need one fake it)."""
     for name in list(os.environ):
         if name.startswith("HTTPLIB_"):
             monkeypatch.delenv(name)
+    from httplib import proxy
+
+    monkeypatch.setattr(proxy, "system_proxy_map", lambda: None)
