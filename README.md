@@ -32,8 +32,11 @@ together. Documentation: <https://jose-pr.github.io/httplib/>.
 - **URL hooks** — `HTTPLIB_HOOKS_<KEY>=<regex>` plus `_PY=module:callable`
   runs your code before matching requests: a login, a signature, a canned
   response.
-- **OS trust store** — an `ssl.SSLContext` from the system's certificates,
-  with no `certifi` bundle involved.
+- **OS trust store, or your own TLS context** — an `ssl.SSLContext` from the
+  system's certificates with no `certifi` bundle involved, or
+  `new_session(ssl_context=...)` for mutual TLS, a cipher list or a pinned
+  protocol version (for example a keystore identity built with
+  `sslcontext`).
 - **A configured `requests.Session`** — retry with backoff, all of the above
   applied in one transport adapter.
 

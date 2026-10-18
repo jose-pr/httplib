@@ -119,7 +119,9 @@ def new_session(*, user_agent: str | None = None, proxies: dict | None = None,
                 verify: bool | str | Path = True, retries: int = 3, backoff: float = 1,
                 status_forcelist: Iterable[int] = TRANSIENT_STATUSES,
                 cookies: bool | str | CookieJar = False, tokens: bool | str | TokenJar = False,
-                auth_provider: AuthProvider | None = None, env: HTTPEnv | None = None) -> requests.Session
+                auth_provider: AuthProvider | None = None, env: HTTPEnv | None = None,
+                ssl_context: ssl.SSLContext | None = None,
+                proxy_ssl_context: ssl.SSLContext | None = None) -> requests.Session
 ```
 
 - One transport adapter applies `proxy.plan(env=env)` to every request,
@@ -135,6 +137,14 @@ def new_session(*, user_agent: str | None = None, proxies: dict | None = None,
 - `verify=True` verifies through `tls.os_ssl_context()` (the OS trust store)
   and names no CA file. A path, or `REQUESTS_CA_BUNDLE` / `CURL_CA_BUNDLE`,
   names a bundle. `verify=False` is left to requests.
+- `ssl_context` is used as given for every https origin. Its own
+  `verify_mode`, trust store, client identity (mutual TLS, including a key
+  held in an OS keystore), ciphers and protocol versions decide. The session
+  never changes it. Beside it, `verify` must stay `True`, or `new_session`
+  raises `ValueError`. A non-`SSLContext` raises `TypeError`.
+  `proxy_ssl_context` does the same for the TLS to an `https://` proxy.
+  The `sslcontext` package builds such contexts (keystore identities,
+  PEM/PKCS#12 from memory), but any `ssl.SSLContext` works.
 - `cookies` / `tokens`: `True` uses a file jar under `jar.store_root(env=env)`
   keyed by the origin's host. A string names one key for every host. A jar
   object is used as given. A token is sent as a per-request `Authorization`:
@@ -151,7 +161,7 @@ def new_session(*, user_agent: str | None = None, proxies: dict | None = None,
 def request_text(session, method, url, *, headers=None, data=None, json_body=None, timeout=60, verify=None) -> tuple[int, str]
 def request_json(session, method, url, *, ...same...) -> tuple[int, Any]
 def request_with_reauth(session, method, url, *, ...same..., auth_fail_statuses=(401, 403), reauth_cb=None, auth_provider=None) -> tuple[int, str]
-def request_text_auto(method, url, *, session=None, <new_session options>, env=None, headers=None, data=None, json_body=None, timeout=60) -> tuple[int, str]
+def request_text_auto(method, url, *, session=None, <new_session options>, env=None, ssl_context=None, proxy_ssl_context=None, headers=None, data=None, json_body=None, timeout=60) -> tuple[int, str]
 def request_json_auto(method, url, *, ...same...) -> tuple[int, Any]
 ```
 
@@ -277,6 +287,9 @@ def retry_after(headers: Iterable[tuple[str, str]], now: float | None = None) ->
 - A malformed `<P>_PROXY_TYPE` is harmless until a proxy is in use.
 - The jar constructors create their directory. Pass `root=` to keep them out
   of the user's state directory.
+- A client certificate loaded into the context you pass is used for every
+  https host the session talks to, redirects included. Give a session an
+  identity only for hosts that should see it.
 - `new_session()` turns off urllib3's `InsecureRequestWarning` for the whole
   process (`urllib3.disable_warnings`), whatever `verify` is.
 - A `_PY` hook names code to import. Never let an untrusted party set the

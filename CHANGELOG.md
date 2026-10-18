@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `jar.default_root()`: the per-user state directory used when
   `<PREFIX>_HOME` is unset.
 - `httplib.__version__`.
+- `new_session(ssl_context=..., proxy_ssl_context=...)` (and the same on the
+  `fetch` `*_auto` helpers): a caller's `ssl.SSLContext` is used as given for
+  every https origin, or for an `https://` proxy. That covers mutual TLS,
+  ciphers and protocol versions. It cannot be combined with a `verify` other
+  than `True`.
 
 ### Changed
 
