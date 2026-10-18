@@ -1,0 +1,58 @@
+site_name: httplib
+site_description: HTTP plumbing over the standard library, with an optional requests session
+site_url: https://jose-pr.github.io/httplib/
+repo_url: https://github.com/jose-pr/httplib
+repo_name: jose-pr/httplib
+edit_uri: edit/main/docs/
+
+# Constrain the scan to docs/ so pymdownx.snippets + strict nav don't trip on
+# repo-level markdown (see kb/PYTHON.md Known Difficulties).
+docs_dir: docs
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - content.code.copy
+
+nav:
+  - Home: index.md
+  - Settings: settings.md
+  - API Reference:
+      - env: api/env.md
+      - proxy: api/proxy.md
+      - session: api/session.md
+      - fetch: api/fetch.md
+      - jar: api/jar.md
+      - cookies: api/cookies.md
+      - hooks: api/hooks.md
+      - tls and retry: api/tls_retry.md
+  - Changelog: changelog.md
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            show_source: true
+            show_root_heading: true
+            merge_init_into_class: true
+
+markdown_extensions:
+  - admonition
+  - tables
+  - pymdownx.snippets:
+      base_path: ["."]
+  - pymdownx.superfences
