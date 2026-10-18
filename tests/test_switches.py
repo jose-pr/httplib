@@ -34,7 +34,7 @@ def test_session_uses_the_configured_header_name(origin, gateway, monkeypatch):
     session = new_session(retries=0)
     # connect: the hook that feeds the plain-http request and the CONNECT
     adapter = session.get_adapter("https://api.example.com/")
-    headers = adapter.proxy_headers(adapter.proxy)
+    headers = adapter.proxy_headers(adapter.route("https://api.example.com/").proxy)
     assert headers == {"X-Proxy-Token": BEARER}
     # prefix: a header of the gateway request
     session.get(origin + "/x", timeout=5)

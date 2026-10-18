@@ -36,7 +36,7 @@ from __future__ import annotations
 import re
 import ssl
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterable, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterable, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 from . import hooks as _hooks
@@ -110,6 +110,7 @@ def _proxy_adapter_class(HTTPAdapter):
             env: Optional[HTTPEnv] = None,
             ssl_context: "Optional[ssl.SSLContext]" = None,
             proxy_ssl_context: "Optional[ssl.SSLContext]" = None,
+            dynamic: bool = False,
             **kwargs: Any,
         ) -> None:
             # Set before HTTPAdapter.__init__, which builds the pool manager.
@@ -117,11 +118,15 @@ def _proxy_adapter_class(HTTPAdapter):
             self.proxy_ssl_context = proxy_ssl_context
             super().__init__(**kwargs)
             self.env = env
+            self.dynamic = dynamic
             self.proxy = proxy
             self.authorization = authorization
             self.endpoint = endpoint
             self.auth_header = auth_header or _proxy.DEFAULT_AUTH_HEADER
-            self._gateway_base = _proxy.prefix_url("", proxy, endpoint) if endpoint is not None and proxy else None
+            # (header, value) per proxy URL, for proxy_headers.
+            self._credentials: Dict[str, Tuple[str, str]] = {}
+            if proxy and authorization:
+                self._credentials[self._key(proxy)] = (self.auth_header, authorization)
 
         def build_connection_pool_key_attributes(self, request, verify, cert=None):
             """Over https: the caller's ``ssl_context`` when there is one,
@@ -164,30 +169,56 @@ def _proxy_adapter_class(HTTPAdapter):
                 return
             super().cert_verify(conn, url, verify, cert)
 
+        @staticmethod
+        def _key(proxy: str) -> str:
+            # requests lower-cases the proxy URL it hands back to proxy_headers.
+            return proxy.rstrip("/").lower()
+
         def proxy_headers(self, proxy: str) -> Dict[str, str]:
             headers = super().proxy_headers(proxy)
-            if self.authorization and self.proxy and proxy.rstrip("/") == self.proxy.rstrip("/"):
-                headers[self.auth_header] = self.authorization
+            credential = self._credentials.get(self._key(proxy))
+            if credential is None and self.dynamic:
+                # Not yet routed through: the configured proxy's own credential.
+                configured = _proxy.resolve(env=self.env)
+                if configured and configured[1] and self._key(configured[0]) == self._key(proxy):
+                    credential = (_proxy.auth_header(env=self.env), configured[1])
+            if credential:
+                headers[credential[0]] = credential[1]
             return headers
 
-        def send(self, request: "requests.PreparedRequest", **kwargs: Any) -> "requests.Response":
+        def route(self, url: str) -> "Optional[_proxy.ProxyPlan]":
+            """The plan for one hop: decided again for every request (the
+            environment as it is now, and the system's answer for this URL)
+            unless the session was given fixed proxies."""
+            if self.dynamic:
+                return _proxy.plan(url=url, env=self.env)
             if not self.proxy:
-                return super().send(request, **kwargs)
+                return None
+            return _proxy.ProxyPlan(self.proxy, self.authorization, self.endpoint, None, self.auth_header)
+
+        def send(self, request: "requests.PreparedRequest", **kwargs: Any) -> "requests.Response":
             original = request.url or ""
+            route = self.route(original)
+            if route is None:
+                if self.dynamic:
+                    kwargs["proxies"] = {}  # decided: direct (trust_env must not re-add a proxy)
+                return super().send(request, **kwargs)
             caller_request = request
             request = request.copy()
             if _proxy.should_bypass(original, env=self.env):
                 kwargs["proxies"] = {}
                 return super().send(request, **kwargs)
-            if self.endpoint is None:
-                kwargs["proxies"] = {"http": self.proxy, "https": self.proxy}
+            if route.authorization:
+                self._credentials[self._key(route.proxy)] = (route.auth_header, route.authorization)
+            if route.endpoint is None:
+                kwargs["proxies"] = {"http": route.proxy, "https": route.proxy}
                 return super().send(request, **kwargs)
             # Prefix gateway. A Location the gateway wrote in its own namespace
             # is already prefixed: never wrap it twice.
-            if not (self._gateway_base and original.startswith(self._gateway_base)):
-                request.url = _proxy.prefix_url(original, self.proxy, self.endpoint)
-            if self.authorization:
-                request.headers[self.auth_header] = self.authorization
+            if not original.startswith(route.gateway_base or "\0"):
+                request.url = _proxy.prefix_url(original, route.proxy, route.endpoint)
+            if route.authorization:
+                request.headers[route.auth_header] = route.authorization
             kwargs["proxies"] = {}
             response = super().send(request, **kwargs)
             response.url = original
@@ -271,9 +302,9 @@ def new_session(
     authorization: Optional[str] = None
     endpoint: Optional[str] = None
     if proxies is None:
-        planned = _proxy.plan(env=env)  # the decision a curl front end makes too
-        if planned is not None:
-            proxy_url, authorization, endpoint = planned.proxy, planned.authorization, planned.endpoint
+        # Validated now, decided per request: proxy.plan(url=...) for each hop,
+        # the decision a curl front end makes too.
+        _proxy.proxy_type(env=env) if _proxy.configured_proxy_url(env=env) else None
     else:
         # Caller-supplied proxies are requests' business (userinfo included);
         # the configured credential still applies if one of them IS the configured proxy.
@@ -290,6 +321,7 @@ def new_session(
         env=env,
         ssl_context=ssl_context,
         proxy_ssl_context=proxy_ssl_context,
+        dynamic=proxies is None,
         max_retries=retry_strategy,
     )
     session.mount("http://", adapter)

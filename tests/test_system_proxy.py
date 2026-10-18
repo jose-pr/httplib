@@ -131,3 +131,65 @@ def test_an_unreadable_configuration_is_no_proxy(monkeypatch):
     monkeypatch.setattr(proxy, "_system_map_at", 0.0)
     assert proxy.system_proxy_map() is None
     assert proxy.system_proxy("https://x.example/", env=HTTPEnv(environ={})) is None
+
+
+def _answering_proxy(name, seen):
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append((name, self.path, self.headers.get("Proxy-Authorization")))
+            body = name.encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    httpd = HTTPServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd
+
+
+def test_one_session_routes_each_url_by_the_systems_answer(monkeypatch):
+    pytest.importorskip("requests")
+    from httplib.session import new_session
+
+    seen = []
+    a, b = _answering_proxy("proxy-a", seen), _answering_proxy("proxy-b", seen)
+    try:
+        fake = _FakeSystem(
+            {
+                "a.example": "http://127.0.0.1:%d" % a.server_address[1],
+                "b.example": "http://127.0.0.1:%d" % b.server_address[1],
+            }
+        )
+        monkeypatch.setattr(proxy, "system_proxy_map", lambda: fake)
+        monkeypatch.setenv("HTTPLIB_PROXY_AUTH", "Bearer t")
+        session = new_session(retries=0)
+        assert session.get("http://a.example/x", timeout=5).text == "proxy-a"
+        assert session.get("http://b.example/y", timeout=5).text == "proxy-b"
+        assert seen == [("proxy-a", "http://a.example/x", "Bearer t"), ("proxy-b", "http://b.example/y", "Bearer t")]
+    finally:
+        for httpd in (a, b):
+            httpd.shutdown()
+            httpd.server_close()
+
+
+def test_the_credential_reaches_a_proxy_named_in_upper_case(monkeypatch):
+    pytest.importorskip("requests")
+    from httplib.session import new_session
+
+    seen = []
+    p = _answering_proxy("proxy", seen)
+    try:
+        monkeypatch.setenv("HTTPLIB_PROXY", "http://LOCALHOST:%d" % p.server_address[1])
+        monkeypatch.setenv("HTTPLIB_PROXY_AUTH", "Bearer t")
+        assert new_session(retries=0).get("http://origin.example/", timeout=5).text == "proxy"
+        assert seen[-1][2] == "Bearer t", "requests lower-cases the proxy URL it asks about"
+    finally:
+        p.shutdown()
+        p.server_close()

@@ -113,7 +113,7 @@ def test_session_reads_through_its_env(monkeypatch):
     monkeypatch.setenv("HTTPLIB_PROXY", "http://ignored:1")
     env = HTTPEnv("MYTOOL", environ={"MYTOOL_PROXY": "http://mytool:3128", "MYTOOL_PROXY_AUTH": "Bearer t"})
     adapter = new_session(env=env).get_adapter("https://api.example.com/")
-    assert adapter.proxy == "http://mytool:3128"
+    assert adapter.route("https://api.example.com/").proxy == "http://mytool:3128"
     assert adapter.proxy_headers("http://mytool:3128") == {"Proxy-Authorization": "Bearer t"}
 
 
