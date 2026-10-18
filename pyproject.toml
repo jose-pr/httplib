@@ -25,7 +25,14 @@ classifiers = [
     "Topic :: Internet :: WWW/HTTP",
     "Typing :: Typed",
 ]
-dependencies = []
+dependencies = [
+    # The system's proxy configuration (WinHTTP, macOS, libproxy/desktops; PAC
+    # and WPAD) is the default route when no proxy variable is set.
+    "proxylib>=1.0,<2",
+    # The OS verifies certificates (CryptoAPI, Security framework); truststore
+    # needs Python 3.10, and 3.9 keeps the stdlib's default context.
+    'truststore>=0.10.0,<0.11; python_version >= "3.10"',
+]
 
 [project.optional-dependencies]
 # requests backs httplib.session and httplib.fetch only, imported when a

@@ -10,6 +10,7 @@ import pytest
 requests = pytest.importorskip("requests")
 
 from httplib import session as httplib_session  # noqa: E402
+from httplib import tls as httplib_tls  # noqa: E402
 
 
 def _adapter():
@@ -84,3 +85,22 @@ def test_the_session_retries_what_curl_calls_transient():
 
     retry = _adapter().max_retries
     assert set(retry.status_forcelist) == set(TRANSIENT_STATUSES) and 408 in TRANSIENT_STATUSES
+
+
+def test_the_os_context_is_the_os_verifier_where_truststore_runs():
+    import sys
+
+    ctx = httplib_tls.new_os_context()
+    assert isinstance(ctx, ssl.SSLContext)
+    assert ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname
+    expected = "truststore" if sys.version_info >= (3, 10) else "ssl"
+    assert type(ctx).__module__.split(".")[0] == expected
+
+
+def test_a_ca_file_replaces_the_os_store(tmp_path):
+    from pathlib import Path
+
+    ca = Path(__file__).parent / "data" / "ca.pem"
+    ctx = httplib_tls.new_os_context(cafile=str(ca))
+    assert type(ctx) is ssl.SSLContext, "a plain context trusting only the given CA"
+    assert [c["subject"] for c in ctx.get_ca_certs()] == [((("commonName", "sslcontext test CA"),),)]

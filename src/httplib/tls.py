@@ -1,14 +1,27 @@
 """The OS trust store as an ``SSLContext`` -- what the requests session
 (``session``) and a curl front end both verify servers against.
-``ssl.create_default_context()`` loads the certificate store on Windows and
-OpenSSL's system defaults elsewhere (``SSL_CERT_FILE`` / ``SSL_CERT_DIR``
-included), so no ``certifi`` bundle is involved. Dependency-free."""
+
+With neither ``cafile`` nor ``capath`` the context is a
+``truststore.SSLContext``: certificates are verified by the operating
+system's own verifier -- CryptoAPI on Windows, the Security framework on
+macOS, OpenSSL over the system's store elsewhere -- so intermediate fetching,
+enterprise roots and policy apply as they do for the system's own clients.
+truststore needs Python 3.10; on 3.9 the context is
+``ssl.create_default_context()``, which loads the certificate store on
+Windows and OpenSSL's system defaults (``SSL_CERT_FILE`` / ``SSL_CERT_DIR``
+included) elsewhere. A ``cafile`` / ``capath`` replaces the store: a plain
+``ssl`` context trusting only them. No ``certifi`` bundle is involved."""
 
 from __future__ import annotations
 
 import ssl
 import time
 from typing import Optional
+
+try:  # Python >= 3.10, where the dependency is installed
+    import truststore
+except ImportError:  # pragma: no cover - exercised on 3.9
+    truststore = None  # type: ignore[assignment]
 
 #: How long the shared context is reused (seconds) before it is rebuilt, so a
 #: certificate added to the system store is picked up.
@@ -18,10 +31,13 @@ _os_context_at = 0.0
 
 
 def new_os_context(cafile: Optional[str] = None, capath: Optional[str] = None) -> "ssl.SSLContext":
-    """A fresh verifying context: on ``cafile`` / ``capath`` when given (they
-    replace the OS store), else the OS trust store. Fresh, so a caller may
-    load a client certificate into it."""
-    return ssl.create_default_context(cafile=cafile, capath=capath)
+    """A fresh verifying client context: on ``cafile`` / ``capath`` when given
+    (they replace the OS store), else the OS trust store, verified by the OS
+    (truststore) where available. Fresh, so a caller may load a client
+    certificate into it."""
+    if cafile or capath or truststore is None:
+        return ssl.create_default_context(cafile=cafile, capath=capath)
+    return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 
 
 def os_ssl_context() -> "ssl.SSLContext":
