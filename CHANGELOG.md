@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - The package stands alone. It was previously the `httplib` library of the
   dotagents `net` overlay, which shipped with a curl-compatible command
-  (`httplib.cli`, `python -m httplib`) that is now a separate package.
+  (`httplib.cli`, `python -m httplib`) that is now the `curlike` package.
   Settings move from the dotagents names to the prefixed ones:
   `AGENTS_PROXY` → `HTTPLIB_PROXY`, `AGENTS_PROXY_AUTH` →
   `HTTPLIB_PROXY_AUTH`, `AGENTS_PROXY_AUTH_HEADER` →
