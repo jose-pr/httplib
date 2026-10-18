@@ -34,7 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `NET_HOOK_*` → `HTTPLIB_HOOK_*`. To keep the `AGENTS_*` names, set
   `HTTPLIB_PREFIX=AGENTS` (hooks are then `AGENTS_HOOKS_<KEY>`).
 - Without `<PREFIX>_HOME`, the jars live in the per-user state directory
-  instead of `~/.agents`.
+  instead of the dotagents store directory.
 - `proxy.resolve()` and `proxy.proxy_authorization()`: the keyword `env: bool`
   is now `configured: bool`.
 - `hooks.hooks_from_env()`, `matching()`, `skipped()` and `call_py_hooks()`
