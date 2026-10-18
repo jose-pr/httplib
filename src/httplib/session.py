@@ -21,7 +21,10 @@ adapter hands urllib3 an ``ssl.create_default_context()`` (the certificate
 store on Windows, OpenSSL's system defaults elsewhere) and no CA file, so no
 ``certifi`` bundle is involved. ``verify=<path>`` and ``REQUESTS_CA_BUNDLE`` /
 ``CURL_CA_BUNDLE`` still name a bundle explicitly; ``verify=False`` is left to
-requests.
+requests. ``ssl_context=`` replaces all of that with a context of the caller's
+own -- a client certificate (a keystore identity too), a cipher list, a
+pinned protocol version -- used as given for every https origin;
+``proxy_ssl_context=`` does the same for the TLS to an ``https://`` proxy.
 
 ``requests`` + ``urllib3`` are this toolkit's **optional dependency** (the
 ``session`` extra). ``new_session`` imports them lazily and raises a clear,
@@ -31,6 +34,7 @@ actionable error if they are absent; every other module works without them.
 from __future__ import annotations
 
 import re
+import ssl
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable, Optional, Union
 from urllib.parse import urlparse
@@ -104,8 +108,13 @@ def _proxy_adapter_class(HTTPAdapter):
             endpoint: Optional[str] = None,
             auth_header: Optional[str] = None,
             env: Optional[HTTPEnv] = None,
+            ssl_context: "Optional[ssl.SSLContext]" = None,
+            proxy_ssl_context: "Optional[ssl.SSLContext]" = None,
             **kwargs: Any,
         ) -> None:
+            # Set before HTTPAdapter.__init__, which builds the pool manager.
+            self.ssl_context = ssl_context
+            self.proxy_ssl_context = proxy_ssl_context
             super().__init__(**kwargs)
             self.env = env
             self.proxy = proxy
@@ -115,21 +124,40 @@ def _proxy_adapter_class(HTTPAdapter):
             self._gateway_base = _proxy.prefix_url("", proxy, endpoint) if endpoint is not None and proxy else None
 
         def build_connection_pool_key_attributes(self, request, verify, cert=None):
-            """``verify=True`` over https: the OS trust-store context, in
-            place of requests' own (a ``certifi`` bundle in 2.32-2.33). Only
-            for ``verify=True`` -- urllib3 writes a pool's ``cert_reqs`` into
-            the context it is given, so a ``verify=False`` pool must never
-            share it."""
+            """Over https: the caller's ``ssl_context`` when there is one,
+            else for ``verify=True`` the OS trust-store context, in place of
+            requests' own (a ``certifi`` bundle in 2.32-2.33). The OS context
+            only for ``verify=True`` -- urllib3 writes a pool's ``cert_reqs``
+            into the context it is given, so a ``verify=False`` pool must
+            never share it."""
             host_params, pool_kwargs = super().build_connection_pool_key_attributes(request, verify, cert)
-            if verify is True and host_params.get("scheme") == "https":
-                pool_kwargs["ssl_context"] = os_ssl_context()
+            if host_params.get("scheme") == "https":
+                if self.ssl_context is not None:
+                    pool_kwargs["ssl_context"] = self.ssl_context
+                elif verify is True:
+                    pool_kwargs["ssl_context"] = os_ssl_context()
             return host_params, pool_kwargs
 
+        def proxy_manager_for(self, proxy, **proxy_kwargs):
+            """An ``https://`` proxy is spoken to over TLS with the caller's
+            ``proxy_ssl_context`` when there is one."""
+            if self.proxy_ssl_context is not None and proxy.lower().startswith("https://"):
+                proxy_kwargs.setdefault("proxy_ssl_context", self.proxy_ssl_context)
+            return super().proxy_manager_for(proxy, **proxy_kwargs)
+
         def cert_verify(self, conn, url: str, verify, cert) -> None:
-            """``verify=True`` keeps certificate checking on but names no CA
-            file: requests would set ``certifi.where()`` (and raise when it is
-            ``None``); with none, urllib3 verifies through the pool's OS
-            context, or loads the OS defaults itself on older requests."""
+            """With the caller's ``ssl_context``, its own ``verify_mode``
+            decides: urllib3 writes the connection's ``cert_reqs`` into the
+            context, so it is given the value the context already holds, and
+            no CA file. ``verify=True`` keeps certificate checking on but
+            names no CA file: requests would set ``certifi.where()`` (and
+            raise when it is ``None``); with none, urllib3 verifies through
+            the pool's OS context, or loads the OS defaults itself on older
+            requests."""
+            if self.ssl_context is not None and url.lower().startswith("https"):
+                super().cert_verify(conn, url, False, cert)  # client cert, no CA file
+                conn.cert_reqs = self.ssl_context.verify_mode
+                return
             if verify is True and url.lower().startswith("https"):
                 super().cert_verify(conn, url, False, cert)  # client cert, no CA file
                 conn.cert_reqs = "CERT_REQUIRED"
@@ -190,10 +218,21 @@ def new_session(
     tokens: Union[bool, str, "TokenJar"] = False,
     auth_provider: Optional["AuthProvider"] = None,
     env: Optional[HTTPEnv] = None,
+    ssl_context: Optional[ssl.SSLContext] = None,
+    proxy_ssl_context: Optional[ssl.SSLContext] = None,
 ) -> "requests.Session":
     """A ``requests.Session`` configured as the module docstring says.
     ``env`` -- where proxy, jar and hook settings are read
-    (:class:`~httplib.env.HTTPEnv`, default ``HTTPEnv()``)."""
+    (:class:`~httplib.env.HTTPEnv`, default ``HTTPEnv()``). ``ssl_context`` --
+    the TLS context for every https origin, used as given: its
+    ``verify_mode``, trust store, client identity and ciphers decide, so
+    ``verify`` must stay ``True`` beside it (anything else: ``ValueError``).
+    ``proxy_ssl_context`` -- the same for an ``https://`` proxy."""
+    for name, value in (("ssl_context", ssl_context), ("proxy_ssl_context", proxy_ssl_context)):
+        if value is not None and not isinstance(value, ssl.SSLContext):
+            raise TypeError("%s must be an ssl.SSLContext, not %s" % (name, type(value).__name__))
+    if ssl_context is not None and verify is not True:
+        raise ValueError("verify=%r and ssl_context contradict: the context's verify_mode decides" % (verify,))
     env = HTTPEnv() if env is None else env
     disable_insecure_request_warnings()
     # Not `requests`: that name is the TYPE_CHECKING import the annotations
@@ -249,6 +288,8 @@ def new_session(
         endpoint=endpoint,
         auth_header=_proxy.auth_header(env=env),
         env=env,
+        ssl_context=ssl_context,
+        proxy_ssl_context=proxy_ssl_context,
         max_retries=retry_strategy,
     )
     session.mount("http://", adapter)

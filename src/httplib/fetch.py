@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import ssl
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Tuple, Union
 
@@ -125,6 +126,8 @@ def request_text_auto(
     tokens: Union[bool, str, TokenJar] = False,
     auth_provider: Optional[AuthProvider] = None,
     env: Optional[HTTPEnv] = None,
+    ssl_context: Optional[ssl.SSLContext] = None,
+    proxy_ssl_context: Optional[ssl.SSLContext] = None,
     headers: Optional[Dict[str, str]] = None,
     data: Any = None,
     json_body: Any = None,
@@ -142,6 +145,8 @@ def request_text_auto(
             tokens=tokens,
             auth_provider=auth_provider,
             env=env,
+            ssl_context=ssl_context,
+            proxy_ssl_context=proxy_ssl_context,
         )
     return request_text(
         session,
@@ -169,6 +174,8 @@ def request_json_auto(
     tokens: Union[bool, str, TokenJar] = False,
     auth_provider: Optional[AuthProvider] = None,
     env: Optional[HTTPEnv] = None,
+    ssl_context: Optional[ssl.SSLContext] = None,
+    proxy_ssl_context: Optional[ssl.SSLContext] = None,
     headers: Optional[Dict[str, str]] = None,
     data: Any = None,
     json_body: Any = None,
@@ -186,6 +193,8 @@ def request_json_auto(
             tokens=tokens,
             auth_provider=auth_provider,
             env=env,
+            ssl_context=ssl_context,
+            proxy_ssl_context=proxy_ssl_context,
         )
     return request_json(
         session,
