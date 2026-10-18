@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from httplib import hooks
+from syshttp import hooks
 
 
 class _SetCookie(BaseHTTPRequestHandler):
@@ -38,7 +38,7 @@ def test_secure_jar_rows_stay_secure_in_the_session():
     pytest.importorskip("requests")
     import requests
 
-    from httplib.cookies import CookieSpec, apply_to_session
+    from syshttp.cookies import CookieSpec, apply_to_session
 
     session = requests.Session()
     apply_to_session(
@@ -53,7 +53,7 @@ def test_secure_jar_rows_stay_secure_in_the_session():
 
 
 def test_jar_file_names_are_filesystem_safe(tmp_path):
-    from httplib.jar import FileCookieJar, FileTokenJar, safe_name
+    from syshttp.jar import FileCookieJar, FileTokenJar, safe_name
 
     assert safe_name("::1") == "__1" and safe_name("a/b") == "a_b" and safe_name("h.example") == "h.example"
     assert FileCookieJar(tmp_path)._path("::1").name == "__1.txt"
@@ -61,7 +61,7 @@ def test_jar_file_names_are_filesystem_safe(tmp_path):
 
 
 def test_netscape_loader_reads_httponly_rows(tmp_path):
-    from httplib.cookies import load_netscape
+    from syshttp.cookies import load_netscape
 
     p = tmp_path / "c.txt"
     row = ["#HttpOnly_h.example", "FALSE", "/", "FALSE", "0", "a", "1"]
@@ -75,18 +75,18 @@ def _boom(session, method, url, kwargs):
 
 
 def test_a_failing_py_hook_names_its_variable(monkeypatch):
-    monkeypatch.setenv("HTTPLIB_HOOKS_BROKEN", ".")
-    monkeypatch.setenv("HTTPLIB_HOOKS_BROKEN_PY", "test_edges:_boom")
+    monkeypatch.setenv("SYSHTTP_HOOKS_BROKEN", ".")
+    monkeypatch.setenv("SYSHTTP_HOOKS_BROKEN_PY", "test_edges:_boom")
     with pytest.raises(
-        RuntimeError, match=r"HTTPLIB_HOOKS_BROKEN_PY \(test_edges:_boom\) failed for GET https://h/x: 'no such token'"
+        RuntimeError, match=r"SYSHTTP_HOOKS_BROKEN_PY \(test_edges:_boom\) failed for GET https://h/x: 'no such token'"
     ):
         hooks.call_py_hooks(None, "GET", "https://h/x", {})
 
 
 def test_a_hosts_cookie_file_holds_that_hosts_cookies_only(origin):
     pytest.importorskip("requests")
-    from httplib.jar import MemoryCookieJar
-    from httplib.session import new_session
+    from syshttp.jar import MemoryCookieJar
+    from syshttp.session import new_session
 
     jar = MemoryCookieJar()
     session = new_session(retries=0, cookies=jar)

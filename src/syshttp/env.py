@@ -1,9 +1,9 @@
-"""Where httplib's settings come from: one prefix, one environment mapping.
+"""Where syshttp's settings come from: one prefix, one environment mapping.
 
 Every setting of this package is the variable ``<PREFIX>_<NAME>`` --
-``HTTPLIB_PROXY``, ``HTTPLIB_PROXY_AUTH``, ``HTTPLIB_HOOKS_<KEY>`` -- and the
-prefix itself comes from ``HTTPLIB_PREFIX`` (default ``HTTPLIB``), so a tool
-embedding httplib can give it a namespace of its own (``HTTPLIB_PREFIX=MYTOOL``
+``SYSHTTP_PROXY``, ``SYSHTTP_PROXY_AUTH``, ``SYSHTTP_HOOKS_<KEY>`` -- and the
+prefix itself comes from ``SYSHTTP_PREFIX`` (default ``SYSHTTP``), so a tool
+embedding syshttp can give it a namespace of its own (``SYSHTTP_PREFIX=MYTOOL``
 reads ``MYTOOL_PROXY``). Conventional variables keep their names under any
 prefix: ``HTTPS_PROXY`` / ``HTTP_PROXY`` / ``ALL_PROXY``, ``NO_PROXY``.
 
@@ -14,7 +14,7 @@ several configurations; every function that reads a setting takes one as
 import: a variable set later takes effect on the next call.
 
 ``prefix=""`` turns the package's own settings off -- only the conventional
-variables are read. It is an argument only: an empty ``HTTPLIB_PREFIX`` counts
+variables are read. It is an argument only: an empty ``SYSHTTP_PREFIX`` counts
 as unset. There is deliberately no ``HTTP`` default: CGI exports every request
 header as an ``HTTP_*`` variable, and a setting such as ``HOOKS_<KEY>_PY``
 names code to import.
@@ -29,9 +29,9 @@ from typing import Iterator, Mapping, Optional, Tuple
 __all__ = ["DEFAULT_PREFIX", "PREFIX_VAR", "HTTPEnv"]
 
 #: The variable naming the prefix of every other setting.
-PREFIX_VAR = "HTTPLIB_PREFIX"
-#: The prefix when neither an argument nor ``HTTPLIB_PREFIX`` gives one.
-DEFAULT_PREFIX = "HTTPLIB"
+PREFIX_VAR = "SYSHTTP_PREFIX"
+#: The prefix when neither an argument nor ``SYSHTTP_PREFIX`` gives one.
+DEFAULT_PREFIX = "SYSHTTP"
 
 _PREFIX_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)*\Z")
 
@@ -49,11 +49,11 @@ def _check_prefix(prefix: str, source: str) -> str:
 class HTTPEnv:
     """A view of the environment under one prefix.
 
-    ``prefix`` -- ``None`` (read ``HTTPLIB_PREFIX`` at each lookup, default
-    ``HTTPLIB``), a prefix such as ``"MYTOOL"``, or ``""`` for conventional
+    ``prefix`` -- ``None`` (read ``SYSHTTP_PREFIX`` at each lookup, default
+    ``SYSHTTP``), a prefix such as ``"MYTOOL"``, or ``""`` for conventional
     variables only. ``environ`` -- the mapping to read, default ``os.environ``
     as it is at each lookup. A malformed prefix is a ``ValueError``: from the
-    constructor for an argument, from the first lookup for ``HTTPLIB_PREFIX``.
+    constructor for an argument, from the first lookup for ``SYSHTTP_PREFIX``.
     """
 
     __slots__ = ("_prefix", "_environ")
@@ -69,15 +69,15 @@ class HTTPEnv:
 
     @property
     def prefix(self) -> str:
-        """The prefix in force: the argument, else ``HTTPLIB_PREFIX``, else
-        ``HTTPLIB``. ``""`` means the package's own settings are off."""
+        """The prefix in force: the argument, else ``SYSHTTP_PREFIX``, else
+        ``SYSHTTP``. ``""`` means the package's own settings are off."""
         if self._prefix is not None:
             return self._prefix
         raw = (self.environ.get(PREFIX_VAR) or "").strip()
         return _check_prefix(raw, PREFIX_VAR) if raw else DEFAULT_PREFIX
 
     def name(self, setting: str) -> Optional[str]:
-        """The variable for ``setting`` (``"PROXY"`` -> ``"HTTPLIB_PROXY"``),
+        """The variable for ``setting`` (``"PROXY"`` -> ``"SYSHTTP_PROXY"``),
         or ``None`` when the prefix is ``""``."""
         prefix = self.prefix
         return "%s_%s" % (prefix, setting) if prefix else None

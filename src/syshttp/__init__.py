@@ -1,10 +1,11 @@
-"""httplib -- HTTP plumbing over the standard library, with an optional
+"""syshttp -- HTTP plumbing that follows the system, with an optional
 ``requests`` session on top.
 
 Public surface (the package's AGENTS.md documents each name):
   env.HTTPEnv                          — where settings come from: <P>_<NAME>, the
-                                         prefix from HTTPLIB_PREFIX (default HTTPLIB)
-  proxy.proxy_url / proxies_from_env   — the proxy from <P>_PROXY, else HTTPS_PROXY & co.
+                                         prefix from SYSHTTP_PREFIX (default SYSHTTP)
+  proxy.proxy_url / proxies_from_env   — the proxy from <P>_PROXY, else HTTPS_PROXY & co.,
+                                         else the system's configuration for the URL
   proxy.resolve                        — (clean proxy URL, Proxy-Authorization value):
                                          <P>_PROXY_AUTH / HTTP_PROXY_AUTH verbatim,
                                          else Basic from the URL's userinfo
@@ -15,16 +16,17 @@ Public surface (the package's AGENTS.md documents each name):
                                          overrides included) the session and curl share
   cookies.load_netscape / save_netscape / cookie_applies / set_cookie_specs
                                        — Netscape jars and curl's cookie rules
-  tls.os_ssl_context / new_os_context  — the OS trust store as an SSLContext
+  tls.os_ssl_context / new_os_context  — the OS verifier (truststore) as an SSLContext
   retry.TRANSIENT_STATUSES / retry_after — what counts as transient, Retry-After
   jar.FileCookieJar / FileTokenJar     — file-backed jars under <P>_HOME
   hooks                                — <P>_HOOKS_<KEY> URL hooks (a curl wrapper,
-                                         an httplib callable) matched on the caller's URL
+                                         an syshttp callable) matched on the caller's URL
   session.new_session                  — configured requests.Session
   fetch.request_text / request_json / request_with_reauth / *_auto helpers
 
 ``env``, ``proxy``, ``jar``, ``cookies``, ``tls``, ``retry`` and ``hooks``
-are dependency-free; ``session``/``fetch`` import ``requests`` lazily (the
+need only syshttp's dependencies (proxylib, truststore on 3.10+);
+``session``/``fetch`` import ``requests`` lazily (the
 ``session`` extra).
 """
 
@@ -55,6 +57,6 @@ __all__ = [
 ]
 
 try:
-    __version__ = version("httplib")
+    __version__ = version("syshttp")
 except PackageNotFoundError:  # a source tree on sys.path, not installed
     __version__ = "0+unknown"

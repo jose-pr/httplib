@@ -1,8 +1,8 @@
-site_name: httplib
+site_name: syshttp
 site_description: HTTP plumbing over the standard library, with an optional requests session
-site_url: https://jose-pr.github.io/httplib/
-repo_url: https://github.com/jose-pr/httplib
-repo_name: jose-pr/httplib
+site_url: https://jose-pr.github.io/syshttp/
+repo_url: https://github.com/jose-pr/syshttp
+repo_name: jose-pr/syshttp
 edit_uri: edit/main/docs/
 
 # Constrain the scan to docs/ so pymdownx.snippets + strict nav don't trip on

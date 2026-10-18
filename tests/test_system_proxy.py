@@ -4,7 +4,7 @@ by <P>_SYSTEM_PROXY=0, and never a failed request when it cannot be read."""
 
 import pytest
 
-from httplib import HTTPEnv, proxy
+from syshttp import HTTPEnv, proxy
 
 
 class _Proxy:
@@ -41,7 +41,7 @@ def system(monkeypatch):
 
 
 def test_the_system_answers_per_url_and_always_connect(system, monkeypatch):
-    monkeypatch.setenv("HTTPLIB_PROXY_TYPE", "prefix:/fetch/")  # describes HTTPLIB_PROXY, not the system's
+    monkeypatch.setenv("SYSHTTP_PROXY_TYPE", "prefix:/fetch/")  # describes SYSHTTP_PROXY, not the system's
     a = proxy.plan(url="https://a.example/x")
     b = proxy.plan(url="https://b.example/y")
     assert (a.proxy, a.endpoint) == ("http://pac-a:3128", None)
@@ -56,7 +56,7 @@ def test_direct_and_no_opinion_are_direct(system):
 def test_a_variable_wins_over_the_system(system, monkeypatch):
     monkeypatch.setenv("HTTPS_PROXY", "http://env:1")
     assert proxy.plan(url="https://a.example/").proxy == "http://env:1"
-    monkeypatch.setenv("HTTPLIB_PROXY", "http://mine:2")
+    monkeypatch.setenv("SYSHTTP_PROXY", "http://mine:2")
     assert proxy.plan(url="https://a.example/").proxy == "http://mine:2"
     assert system.asked == [], "the system is not asked when a variable answers"
 
@@ -68,7 +68,7 @@ def test_no_proxy_is_checked_before_the_system(system, monkeypatch):
 
 
 def test_the_configured_credential_goes_to_the_systems_proxy(system, monkeypatch):
-    monkeypatch.setenv("HTTPLIB_PROXY_AUTH", "Bearer t")
+    monkeypatch.setenv("SYSHTTP_PROXY_AUTH", "Bearer t")
     assert proxy.plan(url="https://a.example/").authorization == "Bearer t"
 
 
@@ -79,13 +79,13 @@ def test_without_a_url_the_system_is_not_asked(system):
 
 def test_system_proxy_switch(system, monkeypatch):
     for off in ("0", "false", "No", "OFF"):
-        monkeypatch.setenv("HTTPLIB_SYSTEM_PROXY", off)
+        monkeypatch.setenv("SYSHTTP_SYSTEM_PROXY", off)
         assert proxy.plan(url="https://a.example/") is None
     for on in ("1", "true", "YES", "on", ""):
-        monkeypatch.setenv("HTTPLIB_SYSTEM_PROXY", on)
+        monkeypatch.setenv("SYSHTTP_SYSTEM_PROXY", on)
         assert proxy.plan(url="https://a.example/").proxy == "http://pac-a:3128"
-    monkeypatch.setenv("HTTPLIB_SYSTEM_PROXY", "maybe")
-    with pytest.raises(ValueError, match="HTTPLIB_SYSTEM_PROXY"):
+    monkeypatch.setenv("SYSHTTP_SYSTEM_PROXY", "maybe")
+    with pytest.raises(ValueError, match="SYSHTTP_SYSTEM_PROXY"):
         proxy.plan(url="https://a.example/")
     assert proxy.system_proxy_enabled(env=HTTPEnv("MYTOOL", environ={"MYTOOL_SYSTEM_PROXY": "0"})) is False
 
@@ -156,7 +156,7 @@ def _answering_proxy(name, seen):
 
 def test_one_session_routes_each_url_by_the_systems_answer(monkeypatch):
     pytest.importorskip("requests")
-    from httplib.session import new_session
+    from syshttp.session import new_session
 
     seen = []
     a, b = _answering_proxy("proxy-a", seen), _answering_proxy("proxy-b", seen)
@@ -168,7 +168,7 @@ def test_one_session_routes_each_url_by_the_systems_answer(monkeypatch):
             }
         )
         monkeypatch.setattr(proxy, "system_proxy_map", lambda: fake)
-        monkeypatch.setenv("HTTPLIB_PROXY_AUTH", "Bearer t")
+        monkeypatch.setenv("SYSHTTP_PROXY_AUTH", "Bearer t")
         session = new_session(retries=0)
         assert session.get("http://a.example/x", timeout=5).text == "proxy-a"
         assert session.get("http://b.example/y", timeout=5).text == "proxy-b"
@@ -181,13 +181,13 @@ def test_one_session_routes_each_url_by_the_systems_answer(monkeypatch):
 
 def test_the_credential_reaches_a_proxy_named_in_upper_case(monkeypatch):
     pytest.importorskip("requests")
-    from httplib.session import new_session
+    from syshttp.session import new_session
 
     seen = []
     p = _answering_proxy("proxy", seen)
     try:
-        monkeypatch.setenv("HTTPLIB_PROXY", "http://LOCALHOST:%d" % p.server_address[1])
-        monkeypatch.setenv("HTTPLIB_PROXY_AUTH", "Bearer t")
+        monkeypatch.setenv("SYSHTTP_PROXY", "http://LOCALHOST:%d" % p.server_address[1])
+        monkeypatch.setenv("SYSHTTP_PROXY_AUTH", "Bearer t")
         assert new_session(retries=0).get("http://origin.example/", timeout=5).text == "proxy"
         assert seen[-1][2] == "Bearer t", "requests lower-cases the proxy URL it asks about"
     finally:

@@ -1,5 +1,5 @@
 """HTTPEnv: the prefix every setting is read under -- the argument, else
-HTTPLIB_PREFIX, else HTTPLIB -- and the conventional variables read under
+SYSHTTP_PREFIX, else SYSHTTP -- and the conventional variables read under
 any prefix."""
 
 import subprocess
@@ -8,37 +8,37 @@ from pathlib import Path
 
 import pytest
 
-from httplib import HTTPEnv, hooks, jar, proxy
+from syshttp import HTTPEnv, hooks, jar, proxy
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 
 
-def test_default_prefix_is_httplib(monkeypatch):
+def test_default_prefix_is_syshttp(monkeypatch):
     env = HTTPEnv()
-    assert env.prefix == "HTTPLIB" and env.name("PROXY") == "HTTPLIB_PROXY"
-    monkeypatch.setenv("HTTPLIB_PROXY", "http://mine:1")
+    assert env.prefix == "SYSHTTP" and env.name("PROXY") == "SYSHTTP_PROXY"
+    monkeypatch.setenv("SYSHTTP_PROXY", "http://mine:1")
     assert proxy.proxy_url() == "http://mine:1"
 
 
-def test_httplib_prefix_renames_every_setting(monkeypatch):
-    monkeypatch.setenv("HTTPLIB_PREFIX", "MYTOOL")
-    monkeypatch.setenv("HTTPLIB_PROXY", "http://ignored:1")
+def test_syshttp_prefix_renames_every_setting(monkeypatch):
+    monkeypatch.setenv("SYSHTTP_PREFIX", "MYTOOL")
+    monkeypatch.setenv("SYSHTTP_PROXY", "http://ignored:1")
     monkeypatch.setenv("MYTOOL_PROXY", "http://mytool:1")
     monkeypatch.setenv("MYTOOL_PROXY_AUTH", "Bearer t")
     assert proxy.resolve() == ("http://mytool:1", "Bearer t")
     # Read at each lookup, not at import or construction.
     env = HTTPEnv()
-    monkeypatch.setenv("HTTPLIB_PREFIX", "OTHER")
+    monkeypatch.setenv("SYSHTTP_PREFIX", "OTHER")
     assert env.prefix == "OTHER"
 
 
-def test_an_empty_httplib_prefix_is_unset(monkeypatch):
-    monkeypatch.setenv("HTTPLIB_PREFIX", "  ")
-    assert HTTPEnv().prefix == "HTTPLIB"
+def test_an_empty_syshttp_prefix_is_unset(monkeypatch):
+    monkeypatch.setenv("SYSHTTP_PREFIX", "  ")
+    assert HTTPEnv().prefix == "SYSHTTP"
 
 
-def test_the_argument_wins_over_httplib_prefix(monkeypatch):
-    monkeypatch.setenv("HTTPLIB_PREFIX", "MYTOOL")
+def test_the_argument_wins_over_syshttp_prefix(monkeypatch):
+    monkeypatch.setenv("SYSHTTP_PREFIX", "MYTOOL")
     monkeypatch.setenv("ARG_PROXY", "http://arg:1")
     monkeypatch.setenv("MYTOOL_PROXY", "http://mytool:1")
     assert proxy.proxy_url(env=HTTPEnv("ARG")) == "http://arg:1"
@@ -52,17 +52,17 @@ def test_prefixes_are_upper_case():
 def test_a_malformed_prefix_is_a_value_error(bad, monkeypatch):
     with pytest.raises(ValueError, match="prefix"):
         HTTPEnv(bad)
-    monkeypatch.setenv("HTTPLIB_PREFIX", bad)
+    monkeypatch.setenv("SYSHTTP_PREFIX", bad)
     env = HTTPEnv()  # constructing reads nothing
-    with pytest.raises(ValueError, match="HTTPLIB_PREFIX"):
+    with pytest.raises(ValueError, match="SYSHTTP_PREFIX"):
         env.prefix
 
 
 def test_empty_prefix_reads_conventional_variables_only(monkeypatch):
-    monkeypatch.setenv("HTTPLIB_PROXY", "http://ignored:1")
-    monkeypatch.setenv("HTTPLIB_PROXY_TYPE", "prefix")
-    monkeypatch.setenv("HTTPLIB_HOOKS_X", ".")
-    monkeypatch.setenv("HTTPLIB_HOOKS_X_PY", "m:f")
+    monkeypatch.setenv("SYSHTTP_PROXY", "http://ignored:1")
+    monkeypatch.setenv("SYSHTTP_PROXY_TYPE", "prefix")
+    monkeypatch.setenv("SYSHTTP_HOOKS_X", ".")
+    monkeypatch.setenv("SYSHTTP_HOOKS_X_PY", "m:f")
     monkeypatch.setenv("HTTPS_PROXY", "http://machine:1")
     monkeypatch.setenv("HTTP_PROXY_AUTH", "Basic m")
     env = HTTPEnv("")
@@ -87,12 +87,12 @@ def test_a_message_names_the_prefixed_variable():
 
 
 def test_jar_root(monkeypatch, tmp_path):
-    assert jar.store_root(env=HTTPEnv(environ={"HTTPLIB_HOME": str(tmp_path)})) == tmp_path
+    assert jar.store_root(env=HTTPEnv(environ={"SYSHTTP_HOME": str(tmp_path)})) == tmp_path
     assert jar.store_root(env=HTTPEnv("AGENTS", environ={"AGENTS_HOME": str(tmp_path)})) == tmp_path
     default = jar.store_root(env=HTTPEnv(environ={}))
-    assert default.name == "httplib" and default == jar.default_root(env=HTTPEnv(environ={}))
+    assert default.name == "syshttp" and default == jar.default_root(env=HTTPEnv(environ={}))
     if sys.platform not in ("win32", "darwin"):
-        assert jar.default_root(env=HTTPEnv(environ={"XDG_STATE_HOME": str(tmp_path)})) == tmp_path / "httplib"
+        assert jar.default_root(env=HTTPEnv(environ={"XDG_STATE_HOME": str(tmp_path)})) == tmp_path / "syshttp"
 
 
 def test_wrapper_environment_names_follow_the_prefix():
@@ -108,9 +108,9 @@ def test_wrapper_environment_names_follow_the_prefix():
 
 def test_session_reads_through_its_env(monkeypatch):
     pytest.importorskip("requests")
-    from httplib.session import new_session
+    from syshttp.session import new_session
 
-    monkeypatch.setenv("HTTPLIB_PROXY", "http://ignored:1")
+    monkeypatch.setenv("SYSHTTP_PROXY", "http://ignored:1")
     env = HTTPEnv("MYTOOL", environ={"MYTOOL_PROXY": "http://mytool:3128", "MYTOOL_PROXY_AUTH": "Bearer t"})
     adapter = new_session(env=env).get_adapter("https://api.example.com/")
     assert adapter.route("https://api.example.com/").proxy == "http://mytool:3128"
@@ -118,17 +118,17 @@ def test_session_reads_through_its_env(monkeypatch):
 
 
 def test_importing_reads_no_variable():
-    """A malformed HTTPLIB_PREFIX fails the first lookup; importing every
+    """A malformed SYSHTTP_PREFIX fails the first lookup; importing every
     module must not be one."""
     code = (
         "import sys; sys.path.insert(0, %r); "
-        "import httplib, httplib.env, httplib.proxy, httplib.jar, httplib.hooks, httplib.cookies, "
-        "httplib.tls, httplib.retry, httplib.session, httplib.fetch; print('ok')" % str(SRC)
+        "import syshttp, syshttp.env, syshttp.proxy, syshttp.jar, syshttp.hooks, syshttp.cookies, "
+        "syshttp.tls, syshttp.retry, syshttp.session, syshttp.fetch; print('ok')" % str(SRC)
     )
     run = subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True,
         text=True,
-        env={"HTTPLIB_PREFIX": "not a prefix", "SYSTEMROOT": "C:\\Windows", "PATH": ""},
+        env={"SYSHTTP_PREFIX": "not a prefix", "SYSTEMROOT": "C:\\Windows", "PATH": ""},
     )
     assert run.stdout.strip() == "ok", run.stderr

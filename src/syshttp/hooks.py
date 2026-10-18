@@ -1,7 +1,7 @@
-"""URL hooks: a wrapper a curl front end runs, or a callable ``httplib``
+"""URL hooks: a wrapper a curl front end runs, or a callable ``syshttp``
 calls, for requests whose URL matches a pattern -- declared in the
-environment, under the prefix of an :class:`~httplib.env.HTTPEnv` (``<P>``,
-``HTTPLIB`` by default). ``<P>_HOOKS_<KEY>`` (plural) declares a hook;
+environment, under the prefix of an :class:`~syshttp.env.HTTPEnv` (``<P>``,
+``SYSHTTP`` by default). ``<P>_HOOKS_<KEY>`` (plural) declares a hook;
 ``<P>_HOOK_<NAME>`` (singular) is a variable one hook RUN exports to its
 wrapper. With the prefix ``""`` no hook is read.
 
@@ -10,7 +10,7 @@ wrapper. With the prefix ``""`` no hook is read.
                                           the proxy's or a prefix gateway's rewrite
     <P>_HOOKS_<KEY>_CURL=<command>        a curl front end runs THIS instead of
                                           itself, with its own argv appended
-    <P>_HOOKS_<KEY>_PY=<module:callable>  httplib calls it before the request:
+    <P>_HOOKS_<KEY>_PY=<module:callable>  syshttp calls it before the request:
                                           callable(session, method, url, kwargs)
 
 A hook does what it wants with the session (log in, set a header in
@@ -23,7 +23,7 @@ a ``<path>.py:callable`` file.
 The curl wrapper is a shell-quoted command line -- a program and its own
 arguments -- that the front end's whole argv is appended to::
 
-    HTTPLIB_HOOKS_X_CURL='cmd fetch --'   ->   cmd fetch -- "$@"
+    SYSHTTP_HOOKS_X_CURL='cmd fetch --'   ->   cmd fetch -- "$@"
 
 Quote (single or double) what has spaces; a backslash is literal on every
 platform, so a Windows path needs no doubling. A first word that is a
@@ -33,9 +33,9 @@ not parse argv), ``<P>_HOOK_KEY`` (which hook matched), ``<P>_HOOK_CURL``
 naming the front end so it can call curl back after its own work, and
 ``<P>_HOOK_SKIP`` carrying its KEY, so that call does not run the same
 wrapper again. A hook with only a ``_PY`` target is ignored by a curl front
-end, one with only ``_CURL`` by httplib.
+end, one with only ``_CURL`` by syshttp.
 
-Several hooks may match one URL: httplib calls each in KEY order (sorted),
+Several hooks may match one URL: syshttp calls each in KEY order (sorted),
 the first returning a response ends the chain; a curl front end runs the
 first ``_CURL`` in that order. A pattern that does not compile is a
 configuration error (``ValueError`` naming the variable) the first time it
@@ -77,7 +77,7 @@ def _env(env: Optional[HTTPEnv]) -> HTTPEnv:
 
 class Hook(object):
     """One declared hook. ``variable`` is the name of the variable declaring
-    it (``HTTPLIB_HOOKS_X``), which every message about the hook names."""
+    it (``SYSHTTP_HOOKS_X``), which every message about the hook names."""
 
     __slots__ = ("key", "pattern", "curl", "py", "variable")
 
@@ -154,7 +154,7 @@ def load_callable(spec: str) -> "PyHook":
         raise ValueError("a hook callable is written <module or file.py>:<callable>, not %r" % spec)
     if target.endswith(".py") and Path(target).is_file():
         path = Path(target).resolve()
-        name = "httplib_hook_" + re.sub(r"\W", "_", path.stem)
+        name = "syshttp_hook_" + re.sub(r"\W", "_", path.stem)
         module_spec = importlib.util.spec_from_file_location(name, str(path))
         if module_spec is None or module_spec.loader is None:
             raise ValueError("%s is not loadable as a Python module" % path)

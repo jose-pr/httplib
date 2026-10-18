@@ -14,7 +14,7 @@ import pytest
 
 pytest.importorskip("requests")
 
-from httplib.session import new_session  # noqa: E402  (after the importorskip)
+from syshttp.session import new_session  # noqa: E402  (after the importorskip)
 
 DATA = Path(__file__).parent / "data"
 

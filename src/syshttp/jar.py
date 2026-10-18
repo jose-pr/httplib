@@ -1,7 +1,7 @@
 """File-backed cookie/token jars, keyed by host.
 
-Jars live under one root, :func:`store_root`: ``<P>_HOME`` (``HTTPLIB_HOME``
-by default; see :mod:`httplib.env`), else the platform's per-user state
+Jars live under one root, :func:`store_root`: ``<P>_HOME`` (``SYSHTTP_HOME``
+by default; see :mod:`syshttp.env`), else the platform's per-user state
 directory. Cookies go under ``<root>/cookies/<host>.txt`` (Netscape format),
 tokens under ``<root>/tokens/<host>.token``.
 
@@ -31,17 +31,17 @@ def safe_name(key: str) -> str:
 
 def default_root(*, env: Optional[HTTPEnv] = None) -> Path:
     """The per-user state directory for jars when ``<P>_HOME`` is unset, a
-    directory ``httplib`` under: ``%LOCALAPPDATA%`` on Windows,
+    directory ``syshttp`` under: ``%LOCALAPPDATA%`` on Windows,
     ``~/Library/Application Support`` on macOS, ``$XDG_STATE_HOME`` (else
     ``~/.local/state``) elsewhere."""
     env = HTTPEnv() if env is None else env
     if sys.platform == "win32":
         base = env.conventional("LOCALAPPDATA")
-        return (Path(base) if base else Path.home() / "AppData" / "Local") / "httplib"
+        return (Path(base) if base else Path.home() / "AppData" / "Local") / "syshttp"
     if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "httplib"
+        return Path.home() / "Library" / "Application Support" / "syshttp"
     base = env.conventional("XDG_STATE_HOME")
-    return (Path(base) if base else Path.home() / ".local" / "state") / "httplib"
+    return (Path(base) if base else Path.home() / ".local" / "state") / "syshttp"
 
 
 def store_root(*, env: Optional[HTTPEnv] = None) -> Path:

@@ -143,12 +143,12 @@ jobs:
           "$RUNNER_TEMP/smoke/bin/python" - <<'PY'
           from importlib.resources import files
 
-          import httplib
+          import syshttp
 
-          root = files("httplib")
+          root = files("syshttp")
           for name in ("py.typed", "AGENTS.md"):
               assert (root / name).is_file(), "the wheel does not ship %s" % name
-          print("ok:", httplib.__name__)
+          print("ok:", syshttp.__name__)
           PY
 
   # Docs are DEPLOYED by docs.yml. This job only GATES the release on a strict
@@ -236,7 +236,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/project/httplib/
+      url: https://pypi.org/project/syshttp/
     permissions:
       id-token: write # required for PyPI Trusted Publishing (OIDC)
     steps:

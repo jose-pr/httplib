@@ -65,7 +65,7 @@ def _import_requests():
         from requests.adapters import HTTPAdapter
         from urllib3.util.retry import Retry
     except ImportError as exc:  # pragma: no cover - exercised via message assert
-        raise ImportError("httplib.session needs 'requests' (with urllib3): " "pip install 'httplib[session]'") from exc
+        raise ImportError("syshttp.session needs 'requests' (with urllib3): " "pip install 'syshttp[session]'") from exc
     return requests, HTTPAdapter, Retry
 
 
@@ -254,7 +254,7 @@ def new_session(
 ) -> "requests.Session":
     """A ``requests.Session`` configured as the module docstring says.
     ``env`` -- where proxy, jar and hook settings are read
-    (:class:`~httplib.env.HTTPEnv`, default ``HTTPEnv()``). ``ssl_context`` --
+    (:class:`~syshttp.env.HTTPEnv`, default ``HTTPEnv()``). ``ssl_context`` --
     the TLS context for every https origin, used as given: its
     ``verify_mode``, trust store, client identity and ciphers decide, so
     ``verify`` must stay ``True`` beside it (anything else: ``ValueError``).

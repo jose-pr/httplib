@@ -1,8 +1,8 @@
 """Proxy resolution: which proxy, with which credentials, for which hosts.
 
-Settings are read through an :class:`~httplib.env.HTTPEnv` (``env=``, default
-``HTTPEnv()``); below, ``<P>`` is its prefix, ``HTTPLIB`` unless
-``HTTPLIB_PREFIX`` or the ``HTTPEnv`` says otherwise.
+Settings are read through an :class:`~syshttp.env.HTTPEnv` (``env=``, default
+``HTTPEnv()``); below, ``<P>`` is its prefix, ``SYSHTTP`` unless
+``SYSHTTP_PREFIX`` or the ``HTTPEnv`` says otherwise.
 
 The proxy source is **``<P>_PROXY``** -- a proxy for this package's traffic,
 distinct from the machine's global proxy so other tools (git, npm, corporate
@@ -25,7 +25,7 @@ none: every request dies with 407. The credential is the value of the
 3. userinfo in the proxy URL (``http://user:pass@host:port``), turned into
    ``Basic`` -- the form curl, ``requests`` and ``urllib`` also read natively.
 
-Example: ``HTTPLIB_PROXY_AUTH="Basic $(printf 'user:pass' | base64)"``.
+Example: ``SYSHTTP_PROXY_AUTH="Basic $(printf 'user:pass' | base64)"``.
 
 When a header value is configured the proxy URL is used **without** its userinfo
 (:func:`resolve`), so no HTTP stack adds a second, competing header. Anything
@@ -37,7 +37,7 @@ that prints a proxy URL goes through :func:`redact`.
   it with an absolute URL, https goes through a ``CONNECT`` tunnel;
 * ``prefix[:/endpoint]`` -- a URL-prefix gateway: the request is made **directly**
   to ``<proxy><endpoint><url>`` (``endpoint`` defaults to ``/``), e.g.
-  ``HTTPLIB_PROXY=https://gw.example HTTPLIB_PROXY_TYPE=prefix:/fetch/`` turns
+  ``SYSHTTP_PROXY=https://gw.example SYSHTTP_PROXY_TYPE=prefix:/fetch/`` turns
   ``GET https://api.example.com/x`` into
   ``GET https://gw.example/fetch/https://api.example.com/x``. The
   ``Proxy-Authorization`` value is sent as a header of that request.

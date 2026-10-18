@@ -4,10 +4,10 @@ requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
-name = "httplib"
+name = "syshttp"
 version = "0.1.0.dev0"
 authors = [{ name = "jose-pr", email = "jose-pr@coqui.dev" }]
-description = "HTTP plumbing over the standard library: proxy resolution with credentials and prefix gateways, Netscape cookie jars, OS trust-store TLS, URL hooks, and an optional requests session"
+description = "HTTP plumbing that follows the system: the system proxy (PAC, WPAD) and the OS certificate verifier by default, proxy credentials and prefix gateways, Netscape cookie jars, OS trust-store TLS, URL hooks, and an optional requests session"
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
@@ -35,21 +35,21 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# requests backs httplib.session and httplib.fetch only, imported when a
-# session is built; importing httplib never needs it. urllib3 comes with it.
+# requests backs syshttp.session and syshttp.fetch only, imported when a
+# session is built; importing syshttp never needs it. urllib3 comes with it.
 session = ["requests>=2.25,<3"]
 # A JavaScript engine for PAC scripts proxylib evaluates itself (Linux without
 # libproxy); Windows and macOS evaluate PAC in the OS.
 pac = ["proxylib[quickjs]>=1.0,<2"]
 # The tests exercise every extra, so dev refers to them rather than repeating
 # their ranges.
-dev = ["httplib[session]", "build", "pytest", "black", "mypy<2", "types-requests"]
+dev = ["syshttp[session]", "build", "pytest", "black", "mypy<2", "types-requests"]
 docs = ["mkdocs", "mkdocs-material", "mkdocstrings[python]"]
 
 [project.urls]
-Homepage = "https://github.com/jose-pr/httplib"
-Documentation = "https://jose-pr.github.io/httplib/"
-Issues = "https://github.com/jose-pr/httplib/issues"
+Homepage = "https://github.com/jose-pr/syshttp"
+Documentation = "https://jose-pr.github.io/syshttp/"
+Issues = "https://github.com/jose-pr/syshttp/issues"
 
 [tool.hatch.build.targets.sdist]
 # "/.*" is dotfiles only; it does not match `*.local.*`, which needs its own
@@ -57,11 +57,11 @@ Issues = "https://github.com/jose-pr/httplib/issues"
 exclude = ["/.*", "*.local.*", "/AGENTS.md", "CLAUDE*"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/httplib"]
+packages = ["src/syshttp"]
 exclude = ["*.local.*", "CLAUDE*"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"README.md" = "httplib/README.md"
+"README.md" = "syshttp/README.md"
 
 [tool.black]
 target-version = ["py39"]
