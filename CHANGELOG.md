@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `syshttp.exceptions`: `SysHTTPError` (the base of what goes wrong at run
+  time), `ConfigurationError` (a `ValueError`), `HookError` (a `RuntimeError`)
+  and `ResponseError` (a `ValueError`), exported from the root. A malformed
+  setting, a hook that cannot be loaded, a failing hook and a body that is not
+  JSON raise them; every one is still the `ValueError` or `RuntimeError` it
+  was, so existing handlers keep working. A caller's own mistake stays a plain
+  `ValueError` / `TypeError`.
+- Every public module declares `__all__` (`proxy` also lists its setting-name
+  constants, `PROXY` and `DEFAULT_AUTH_HEADER` among them).
 - `syshttp.env.HTTPEnv(prefix=None, environ=None)`: every setting is
   `<PREFIX>_<NAME>`, with the prefix from `SYSHTTP_PREFIX` (default `SYSHTTP`).
   `prefix=""` reads only the conventional variables (`HTTPS_PROXY` and the
@@ -97,6 +106,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - The header says that jars, tokens, `_PY` hooks and `auth_provider` apply to
   `session.request` and not to a bare `session.send()`, which gets the proxy
   decision and TLS only.
+
+- `new_session()` no longer calls `urllib3.disable_warnings`, which silenced
+  `InsecureRequestWarning` for the whole process; with `verify=False` urllib3
+  warns as it does for any requests session. The undocumented
+  `syshttp.warnings` module is gone.
 
 ### Removed
 

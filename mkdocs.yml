@@ -38,6 +38,7 @@ nav:
       - cookies: api/cookies.md
       - hooks: api/hooks.md
       - tls and retry: api/tls_retry.md
+      - exceptions: api/exceptions.md
       - autopatch: api/autopatch.md
   - Changelog: changelog.md
 

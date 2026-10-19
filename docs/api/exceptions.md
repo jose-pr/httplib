@@ -1,0 +1,3 @@
+# `syshttp.exceptions`
+
+::: syshttp.exceptions

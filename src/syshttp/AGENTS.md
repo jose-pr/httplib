@@ -9,9 +9,10 @@ self-contained. Development documentation lives with the source at
 Import names from their modules: `syshttp.env`, `syshttp.proxy`,
 `syshttp.session`, `syshttp.fetch`, `syshttp.jar`, `syshttp.cookies`,
 `syshttp.hooks`, `syshttp.tls`, `syshttp.retry`, `syshttp.auth`,
-`syshttp.autopatch`. The
-root re-exports `HTTPEnv`, `NoReachableProxyError`, `proxy_map`,
-`configured_proxy` and `proxy_type`.
+`syshttp.exceptions`, `syshttp.autopatch`. Each declares `__all__`: a name
+outside it is not API, and a module whose name starts with `_` is private.
+The root re-exports `HTTPEnv`, the exceptions, `NoReachableProxyError`,
+`proxy_map`, `configured_proxy` and `proxy_type`.
 
 `pip install syshttp` brings proxylib 2.0.2+ (proxy routing and the system's proxy configuration),
 sslcontext (the system's TLS client; truststore on Python 3.10+) and
@@ -89,6 +90,9 @@ def auth_header(*, env=None) -> str
 def proxy_type(*, env=None) -> tuple[str, str | None]
 NoReachableProxyError = proxylib.NoReachableProxyError
 SYSTEM_PROXY_MAX_AGE = 60
+PROXY = "PROXY"; PROXY_AUTH = "PROXY_AUTH"; PROXY_AUTH_HEADER = "PROXY_AUTH_HEADER"
+PROXY_TYPE = "PROXY_TYPE"; SYSTEM_PROXY = "SYSTEM_PROXY"   # setting names, as `<P>_<NAME>`
+DEFAULT_AUTH_HEADER = "Proxy-Authorization"; MACHINE_AUTH_VAR = "HTTP_PROXY_AUTH"
 ```
 
 - `proxy_map()` reads the settings at every lookup, so one map serves a
@@ -112,9 +116,10 @@ SYSTEM_PROXY_MAX_AGE = 60
   turns proxylib's implicit loopback bypass off, as curl has none. `proxy_user` (`-U user:password`) becomes the
   credential of whichever proxy answers.
 - A malformed `<P>_PROXY`, `<P>_PROXY_TYPE` or `<P>_PROXY_AUTH_HEADER`
-  raises `ValueError` (proxylib's `ProxyParseError` for a URL) at lookup,
-  only when `<P>_PROXY` is set; a bad `<P>_SYSTEM_PROXY` only when the
-  system would be asked.
+  raises `ConfigurationError` (proxylib's `ProxyParseError` for a URL) at
+  lookup, only when `<P>_PROXY` is set (the header name only when
+  `<P>_PROXY_AUTH` is too); a bad `<P>_SYSTEM_PROXY` only when the system
+  would be asked.
 - `configured_proxy()` is `<P>_PROXY` as a proxylib `Proxy` (a bare
   `host:port` is `http`). Its credential is `<P>_PROXY_AUTH`, a header value
   sent verbatim in `auth_header()` (`<P>_PROXY_AUTH_HEADER`, default
@@ -204,6 +209,28 @@ def new_session(*, user_agent: str | None = None, proxies: dict | None = None,
   thread, so another thread's requests still run them.
 - `auth_provider.ensure(session, url)` runs before each request, and its
   errors are swallowed.
+
+## Exceptions (`syshttp.exceptions`)
+
+```python
+class SysHTTPError(Exception)
+class ConfigurationError(SysHTTPError, ValueError)
+class HookError(SysHTTPError, RuntimeError)
+class ResponseError(SysHTTPError, ValueError)
+```
+
+- `SysHTTPError` is the base of what goes wrong at run time. proxylib's and
+  requests' own errors (`NoReachableProxyError`, `ProxyParseError`,
+  `requests.exceptions.*`) pass through as they are.
+- `ConfigurationError`: a setting or stored credential that cannot be used
+  (a malformed `<P>_PROXY_TYPE`, a regular expression that does not compile,
+  a hook that cannot be loaded, a token with a line break, a malformed
+  `SYSHTTP_PREFIX`). The message names the variable or key, never a secret.
+- `HookError`: a `_PY` hook failed; the hook's own exception is `__cause__`.
+- `ResponseError`: a body that is not the JSON `request_json` was asked for.
+- A caller's own mistake is a plain `ValueError` or `TypeError`, not one of
+  these: a malformed `prefix=` argument, `verify=False` beside `ssl_context`,
+  `cert=` beside `ssl_context`, an unknown patch target.
 
 ## Fetch helpers (`syshttp.fetch`, extra `session`)
 
@@ -490,7 +517,7 @@ def patched() -> tuple[str, ...]
 - A client certificate loaded into the context you pass is used for every
   https host the session talks to, redirects included. Give a session an
   identity only for hosts that should see it.
-- `new_session()` turns off urllib3's `InsecureRequestWarning` for the whole
-  process (`urllib3.disable_warnings`), whatever `verify` is.
+- With `verify=False`, urllib3 warns (`InsecureRequestWarning`) as it does
+  for any requests session: `new_session()` changes no warning filter.
 - A `_PY` hook names code to import. Never let an untrusted party set the
   environment of a process using syshttp.
