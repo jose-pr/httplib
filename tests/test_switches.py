@@ -32,10 +32,12 @@ def test_session_uses_the_configured_header_name(origin, gateway, monkeypatch):
 
     monkeypatch.setenv("SYSHTTP_PROXY_AUTH_HEADER", "X-Proxy-Token")
     session = new_session(retries=0)
-    # connect: the hook that feeds the plain-http request and the CONNECT
+    # connect: the header the proxy entry carries to the proxy alone
+    monkeypatch.setenv("SYSHTTP_PROXY_TYPE", "connect")
     adapter = session.get_adapter("https://api.example.com/")
-    headers = adapter.proxy_headers(adapter.route("https://api.example.com/").proxy)
-    assert headers == {"X-Proxy-Token": BEARER}
+    (entry,) = adapter.route("https://api.example.com/")
+    assert entry.headers == {"X-Proxy-Token": BEARER}
+    monkeypatch.setenv("SYSHTTP_PROXY_TYPE", "prefix:/fetch/")
     # prefix: a header of the gateway request
     session.get(origin + "/x", timeout=5)
     seen = _Gateway.seen[-1][1]

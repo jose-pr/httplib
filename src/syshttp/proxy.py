@@ -1,69 +1,56 @@
-"""Proxy resolution: which proxy, with which credentials, for which hosts.
+"""Proxy routing: syshttp's settings as one proxylib proxy map.
 
 Settings are read through an :class:`~syshttp.env.HTTPEnv` (``env=``, default
 ``HTTPEnv()``); below, ``<P>`` is its prefix, ``SYSHTTP`` unless
 ``SYSHTTP_PREFIX`` or the ``HTTPEnv`` says otherwise.
 
-The proxy source is **``<P>_PROXY``** -- a proxy for this package's traffic,
-distinct from the machine's global proxy so other tools (git, npm, corporate
-CLIs) are not forced through it. If it is unset, fall back to the
-environment's convention: ``HTTPS_PROXY`` -> ``HTTP_PROXY`` -> ``ALL_PROXY``
-(either case). If none is set, the **system's proxy configuration** for the
-URL being requested (:func:`system_proxy`, through proxylib: WinHTTP on
-Windows, CFNetwork on macOS, libproxy or the desktop's settings elsewhere --
-manual proxies, PAC scripts and WPAD alike). ``<P>_SYSTEM_PROXY=0`` turns that
-last source off. A system proxy is always spoken to as ``connect``. Its answer
-is a list (``PROXY a; PROXY b; DIRECT``): the first proxy that accepts a
-connection is used, DIRECT once reached is direct, and a list with no
-reachable proxy and no DIRECT raises :class:`NoReachableProxyError`.
+:func:`proxy_map` is a proxylib ``ProxyMap`` that reads the settings at every
+lookup and answers, in order:
 
-**Credentials.** An authenticating proxy is the normal case behind a corporate
-gateway, and a proxy that is configured but not authenticated to is worse than
-none: every request dies with 407. The credential is the value of the
-``Proxy-Authorization`` header, sent verbatim, so any scheme works (``Basic``,
-``Bearer``, ``Negotiate`` tokens, ...). Sources, first one wins:
+1. **``<P>_PROXY``** -- a proxy for this package's traffic, distinct from the
+   machine's so other tools (git, npm, corporate CLIs) are not forced through
+   it. Its credential is ``<P>_PROXY_AUTH`` (a header value sent verbatim, in
+   ``<P>_PROXY_AUTH_HEADER``, default ``Proxy-Authorization``), else the URL's
+   userinfo as Basic. ``<P>_PROXY_TYPE=prefix[:/endpoint]`` makes it a
+   URL-prefix gateway: ``GET https://api.example.com/x`` becomes
+   ``GET <proxy><endpoint>https://api.example.com/x``.
+2. **The machine's proxy**: the ``*_PROXY`` variables when any is set (per
+   scheme, as proxylib's ``EnvProxyConfig`` reads them: lowercase first,
+   httpoxy-safe), else the system's configuration for the URL (WinHTTP on
+   Windows, CFNetwork on macOS, libproxy or the desktop's settings
+   elsewhere; PAC scripts and WPAD included), unless ``<P>_SYSTEM_PROXY`` is
+   off. ``HTTP_PROXY_AUTH`` is its credential (``Proxy-Authorization``).
+3. **DIRECT.**
 
-1. **``<P>_PROXY_AUTH``** -- the configured proxy's header value;
-2. **``HTTP_PROXY_AUTH``** -- the same for the machine's proxy;
-3. userinfo in the proxy URL (``http://user:pass@host:port``), turned into
-   ``Basic`` -- the form curl, ``requests`` and ``urllib`` also read natively.
-
-Example: ``SYSHTTP_PROXY_AUTH="Basic $(printf 'user:pass' | base64)"``.
-
-When a header value is configured the proxy URL is used **without** its userinfo
-(:func:`resolve`), so no HTTP stack adds a second, competing header. Anything
-that prints a proxy URL goes through :func:`redact`.
-
-**Kind.** ``<P>_PROXY_TYPE`` says how the proxy is spoken to:
-
-* ``connect`` (default) -- a standard HTTP proxy: plain-http requests are sent to
-  it with an absolute URL, https goes through a ``CONNECT`` tunnel;
-* ``prefix[:/endpoint]`` -- a URL-prefix gateway: the request is made **directly**
-  to ``<proxy><endpoint><url>`` (``endpoint`` defaults to ``/``), e.g.
-  ``SYSHTTP_PROXY=https://gw.example SYSHTTP_PROXY_TYPE=prefix:/fetch/`` turns
-  ``GET https://api.example.com/x`` into
-  ``GET https://gw.example/fetch/https://api.example.com/x``. The
-  ``Proxy-Authorization`` value is sent as a header of that request.
-
-**Bypass.** ``NO_PROXY`` / ``no_proxy`` (comma-separated ``host[:port]`` suffixes,
-or ``*``) is honoured the same way curl and ``requests`` read it, so a loopback
-test server or an internal host is not sent to the proxy: :func:`should_bypass`.
+``NO_PROXY`` / ``no_proxy`` hosts go direct before any of it (proxylib's
+``BypassRules``: suffixes, CIDR, ports, loopback). An answer is a list
+(``PROXY a; PROXY b; DIRECT``): proxylib's client integrations try it in
+order and raise the last error when no entry connects; a client that sends
+through one proxy only (urllib, a curl command line) takes it through
+``proxylib.Probed``, which raises :class:`NoReachableProxyError`.
 """
 
 from __future__ import annotations
 
-import base64
 import logging
 import threading
 import time
-from typing import Any, Dict, Iterable, Optional, Tuple
-from urllib.parse import unquote, urlsplit, urlunsplit
+from typing import Any, Mapping, Optional, Tuple
 
-# The stdlib's own NO_PROXY matcher (what urllib and requests use); absent
-# from typeshed.
-from urllib.request import proxy_bypass_environment  # type: ignore[attr-defined]
+import proxylib
+from proxylib import NoReachableProxyError, Proxy
 
 from .env import HTTPEnv
+
+__all__ = (
+    "NoReachableProxyError",
+    "auth_header",
+    "configured_proxy",
+    "proxy_map",
+    "proxy_type",
+    "system_map",
+    "system_proxy_enabled",
+)
 
 #: The settings this module reads, as ``<P>_<NAME>``.
 PROXY = "PROXY"
@@ -74,52 +61,22 @@ PROXY_AUTH_HEADER = "PROXY_AUTH_HEADER"
 #: How the proxy is spoken to: ``connect`` (default) or ``prefix[:/endpoint]``.
 PROXY_TYPE = "PROXY_TYPE"
 DEFAULT_AUTH_HEADER = "Proxy-Authorization"
-
-#: Whether the system's proxy configuration is the last source, as a boolean
+#: Whether the system's proxy configuration is consulted, as a boolean
 #: ``<P>_SYSTEM_PROXY`` (``1``/``true``/``yes``/``on`` or their opposites;
 #: unset or empty: on).
 SYSTEM_PROXY = "SYSTEM_PROXY"
-#: How long the system's proxy configuration is reused (seconds) before it is
-#: read again, and how long one URL's answer is kept.
+#: The machine proxy's header value, read under any prefix.
+MACHINE_AUTH_VAR = "HTTP_PROXY_AUTH"
+#: How long (seconds) the system's configuration, and its answer for one URL,
+#: are reused before they are read again.
 SYSTEM_PROXY_MAX_AGE = 60
-#: How long (seconds) the proxy picked from one of the system's lists is reused
-#: before the list is probed again. proxylib skips a proxy that did not answer
-#: for as long.
-PROBE_MAX_AGE = 30
-#: How long (seconds) each proxy of the list is given to accept a connection.
-PROBE_TIMEOUT = 5.0
 
 _log = logging.getLogger(__name__)
 _TRUE = ("1", "true", "yes", "on")
 _FALSE = ("0", "false", "no", "off")
 _system_lock = threading.Lock()
-_system_map: Any = None
-_system_map_at = 0.0
-# The system's list as proxy URLs ("" for DIRECT) -> (monotonic time, the URL picked or None).
-_picked: "Dict[Tuple[str, ...], Tuple[float, Optional[str]]]" = {}
-
-
-class NoReachableProxyError(ConnectionError):
-    """No proxy the system's configuration names for a URL accepts a
-    connection, and its answer holds no DIRECT. ``proxies`` are the ones tried,
-    as ``host:port``."""
-
-    def __init__(self, proxies: Iterable[str]):
-        self.proxies = tuple(proxies)
-        super().__init__("no proxy the system's configuration names is reachable: %s" % ", ".join(self.proxies))
-
-
-#: The machine proxy's header value, read under any prefix.
-MACHINE_AUTH_VAR = "HTTP_PROXY_AUTH"
-# Fallback order after <P>_PROXY, both cases (curl reads lowercase per httpoxy).
-_FALLBACK_VARS = (
-    "HTTPS_PROXY",
-    "https_proxy",
-    "HTTP_PROXY",
-    "http_proxy",
-    "ALL_PROXY",
-    "all_proxy",
-)
+_system: Any = None
+_system_at = 0.0
 
 
 def _env(env: Optional[HTTPEnv]) -> HTTPEnv:
@@ -129,11 +86,6 @@ def _env(env: Optional[HTTPEnv]) -> HTTPEnv:
 def _var(env: HTTPEnv, setting: str) -> str:
     """The variable to name in a message about ``setting``."""
     return env.name(setting) or setting
-
-
-def _normalize(url: str) -> str:
-    """curl accepts a bare ``host:port``; the HTTP stacks need a scheme."""
-    return url if "://" in url else "http://" + url
 
 
 def system_proxy_enabled(*, env: Optional[HTTPEnv] = None) -> bool:
@@ -151,128 +103,8 @@ def system_proxy_enabled(*, env: Optional[HTTPEnv] = None) -> bool:
     raise ValueError("%s must be one of %s, not %r" % (_var(env, SYSTEM_PROXY), "/".join(_TRUE + _FALSE), raw))
 
 
-def system_proxy_map() -> Any:
-    """The system's proxy configuration as a proxylib ``ProxyMap``, read once
-    and reused for :data:`SYSTEM_PROXY_MAX_AGE` seconds -- or ``None`` when it
-    cannot be read (logged at DEBUG; a broken configuration is no proxy, never
-    a failed request). The OS's own engine answers (``proxylib.system_proxy(
-    "system")``), so a PAC script or WPAD is evaluated the way the system's
-    own clients evaluate it."""
-    global _system_map, _system_map_at
-    with _system_lock:
-        now = time.monotonic()
-        if _system_map_at and now - _system_map_at <= SYSTEM_PROXY_MAX_AGE:
-            return _system_map
-        try:
-            import proxylib
-
-            found = proxylib.system_proxy("system")
-            # A PAC URL still to be loaded (a JS engine evaluates it: the pac extra).
-            source: Any = proxylib.load_pac(found) if isinstance(found, str) else found
-            _system_map = proxylib.ConfigurableProxyMap(source, cache_ttl=SYSTEM_PROXY_MAX_AGE)
-        except Exception as exc:
-            _log.debug("the system proxy configuration could not be read: %s", exc)
-            _system_map = None
-        _system_map_at = now
-        return _system_map
-
-
-def first_reachable(answer: "Tuple[Any, ...]") -> Any:
-    """proxylib's ``first_working_proxy``: the first proxy of ``answer`` whose
-    port accepts a TCP connection, ``None`` once a DIRECT entry is reached;
-    ``LookupError`` when neither."""
-    import proxylib
-
-    return proxylib.first_working_proxy(answer, timeout=PROBE_TIMEOUT)
-
-
-def _pick(answer: "Tuple[Any, ...]") -> Optional[str]:
-    """The URL of the proxy to use from one of the system's answers, or
-    ``None`` for DIRECT; the pick is reused for :data:`PROBE_MAX_AGE` seconds."""
-    if not answer or answer[0] is None:
-        return None
-    key = tuple("" if entry is None else entry.url for entry in answer)
-    now = time.monotonic()
-    with _system_lock:
-        found = _picked.get(key)
-    if found is not None and now - found[0] <= PROBE_MAX_AGE:
-        return found[1]
-    try:
-        chosen = first_reachable(answer)
-    except LookupError:
-        raise NoReachableProxyError(
-            "%s:%s" % (entry.host, entry.port) if entry.port else entry.host for entry in answer if entry is not None
-        ) from None
-    picked = None if chosen is None else chosen.url
-    with _system_lock:
-        _picked[key] = (now, picked)
-    return picked
-
-
-def system_proxy(url: str, *, env: Optional[HTTPEnv] = None) -> Optional[str]:
-    """The proxy the system's configuration names for ``url``: the first of
-    its answer that accepts a connection, probed (:data:`PROBE_TIMEOUT` each)
-    and reused for :data:`PROBE_MAX_AGE` seconds. ``None`` for DIRECT (also
-    when a DIRECT entry comes before any reachable proxy), for no opinion,
-    when the configuration cannot be read, or when ``<P>_SYSTEM_PROXY`` turns
-    it off. :class:`NoReachableProxyError` when no proxy of the answer is
-    reachable and it holds no DIRECT."""
-    if not system_proxy_enabled(env=env):
-        return None
-    mapping = system_proxy_map()
-    if mapping is None:
-        return None
-    try:
-        answer = tuple(mapping[url])
-    except KeyError:
-        return None
-    except Exception as exc:
-        _log.debug("the system proxy configuration failed for a URL: %s", exc)
-        return None
-    return _pick(answer)
-
-
-def configured_proxy_url(*, env: Optional[HTTPEnv] = None) -> Optional[str]:
-    """The proxy the environment names: ``<P>_PROXY``, else the first set of
-    ``HTTPS_PROXY``/``HTTP_PROXY``/``ALL_PROXY`` (either case); ``None``
-    without one. The system's configuration is not consulted."""
-    env = _env(env)
-    value = env.get(PROXY) or env.conventional(*_FALLBACK_VARS)
-    return _normalize(value) if value else None
-
-
-def proxy_url(*, url: Optional[str] = None, env: Optional[HTTPEnv] = None) -> Optional[str]:
-    """The proxy URL to use (userinfo included if the source put it there),
-    or ``None`` for direct.
-
-    :func:`configured_proxy_url` wins; otherwise, given the ``url`` being
-    requested, :func:`system_proxy` for it. Without ``url`` the system's
-    configuration is not consulted: its answer depends on the URL."""
-    configured = configured_proxy_url(env=env)
-    if configured or not url:
-        return configured
-    found = system_proxy(url, env=env)
-    return _normalize(found) if found else None
-
-
-def basic_authorization(user: str, password: str) -> str:
-    """The ``Proxy-Authorization`` value for Basic credentials."""
-    token = base64.b64encode(("%s:%s" % (user, password)).encode("utf-8")).decode("ascii")
-    return "Basic " + token
-
-
-def userinfo(url: Optional[str]) -> Optional[Tuple[str, str]]:
-    """``(user, password)`` from the URL's userinfo, percent-decoded, or ``None``."""
-    if not url:
-        return None
-    parts = urlsplit(_normalize(url))
-    if parts.username is None:
-        return None
-    return unquote(parts.username), unquote(parts.password or "")
-
-
 def auth_header(*, env: Optional[HTTPEnv] = None) -> str:
-    """The name of the header the proxy credential is sent in:
+    """The name of the header ``<P>_PROXY_AUTH`` is sent in:
     ``<P>_PROXY_AUTH_HEADER``, else ``Proxy-Authorization``. A value with
     a colon or whitespace is not a header name: a ``ValueError``."""
     env = _env(env)
@@ -282,72 +114,6 @@ def auth_header(*, env: Optional[HTTPEnv] = None) -> str:
     if ":" in name or any(ch.isspace() for ch in name):
         raise ValueError("%s must be a header name, not %r" % (_var(env, PROXY_AUTH_HEADER), name))
     return name
-
-
-def configured_authorization(*, env: Optional[HTTPEnv] = None) -> Optional[str]:
-    """The header value from ``<P>_PROXY_AUTH`` / ``HTTP_PROXY_AUTH``, or ``None``."""
-    env = _env(env)
-    return env.get(PROXY_AUTH) or env.conventional(MACHINE_AUTH_VAR)
-
-
-def proxy_authorization(
-    url: Optional[str] = None,
-    *,
-    configured: bool = True,
-    env: Optional[HTTPEnv] = None,
-    target: Optional[str] = None,
-) -> Optional[str]:
-    """The ``Proxy-Authorization`` value to send to the proxy, or ``None``.
-
-    A configured header value (``<P>_PROXY_AUTH`` then ``HTTP_PROXY_AUTH``)
-    wins; otherwise the URL's userinfo as ``Basic``. ``url`` defaults to the
-    proxy :func:`proxy_url` picks for ``target``. ``configured=False`` ignores
-    the variables -- for a proxy the caller named explicitly (curl's ``-x``),
-    whose credentials are its own userinfo, never the configured proxy's."""
-    if configured:
-        value = configured_authorization(env=env)
-        if value:
-            return value
-    creds = userinfo(url if url is not None else proxy_url(url=target, env=env))
-    if creds:
-        return basic_authorization(*creds)
-    return None
-
-
-def strip_auth(url: str) -> str:
-    """``url`` without any userinfo: the authority is what follows the last
-    ``@`` of the netloc, verbatim (IPv6 brackets, odd ports and case intact)."""
-    parts = urlsplit(_normalize(url))
-    return urlunsplit(parts._replace(netloc=parts.netloc.rpartition("@")[2]))
-
-
-def redact(url: Optional[str]) -> Optional[str]:
-    """``url`` safe to print: the password, if any, replaced by ``***``."""
-    if not url:
-        return url
-    parts = urlsplit(_normalize(url))
-    if parts.password is None:
-        return url
-    authority = parts.netloc.rpartition("@")[2]
-    return urlunsplit(parts._replace(netloc="%s:***@%s" % (parts.username or "", authority)))
-
-
-def resolve(
-    url: Optional[str] = None,
-    *,
-    configured: bool = True,
-    env: Optional[HTTPEnv] = None,
-    target: Optional[str] = None,
-) -> Optional[Tuple[str, Optional[str]]]:
-    """``(proxy_url_without_userinfo, authorization)`` -- what an HTTP stack
-    should connect to and the ``Proxy-Authorization`` value to send it (``None``
-    when the proxy needs none) -- or ``None`` when no proxy is configured.
-    ``url``/``configured`` as in :func:`proxy_authorization`; without ``url``
-    the proxy is :func:`proxy_url` for ``target``, the URL being requested."""
-    url = url if url is not None else proxy_url(url=target, env=env)
-    if not url:
-        return None
-    return strip_auth(url), proxy_authorization(url, configured=configured, env=env)
 
 
 def proxy_type(*, env: Optional[HTTPEnv] = None) -> Tuple[str, Optional[str]]:
@@ -370,142 +136,185 @@ def proxy_type(*, env: Optional[HTTPEnv] = None) -> Tuple[str, Optional[str]]:
     return "prefix", endpoint
 
 
-def prefix_url(
-    target: str, proxy: Optional[str] = None, endpoint: Optional[str] = None, *, env: Optional[HTTPEnv] = None
-) -> str:
-    """``<proxy><endpoint><target>``: the URL to request from a prefix gateway.
-    ``proxy`` (userinfo dropped) and ``endpoint`` default to the configured ones;
-    the target is appended as-is, so the gateway sees the URL the caller wrote."""
-    proxy = strip_auth(proxy if proxy is not None else (proxy_url(env=env) or ""))
-    if endpoint is None:
-        endpoint = proxy_type(env=env)[1] or "/"
-    return proxy.rstrip("/") + endpoint + target
+def _with_credential(proxy: Proxy, header: str, value: str) -> Proxy:
+    """``proxy`` sending ``value`` in ``header`` instead of its userinfo."""
+    headers = proxy.headers
+    headers[header] = value
+    return Proxy(proxy.scheme, proxy.host, proxy.port, path=proxy.path, headers=headers)
 
 
-def bypassed_by(host: str, no_proxy: Optional[str]) -> bool:
-    """Does ``no_proxy`` (curl's comma list: ``host[:port]`` suffixes, or ``*``)
-    say ``host`` goes direct? ``host`` may include a port."""
-    if not no_proxy:
-        return False
-    return bool(proxy_bypass_environment(host, {"no": no_proxy}))
+def _with_user(proxy: Proxy, user: str) -> Proxy:
+    """``proxy`` with curl's ``-U user:password`` as its only credential."""
+    name, _, password = user.partition(":")
+    return Proxy(proxy.scheme, proxy.host, proxy.port, name, password, path=proxy.path)
 
 
-def no_proxy_from_env(*, env: Optional[HTTPEnv] = None) -> Optional[str]:
-    """The ``NO_PROXY`` / ``no_proxy`` list (either case), or ``None``."""
-    return _env(env).conventional("NO_PROXY", "no_proxy")
-
-
-_ENV = object()  # sentinel: "read NO_PROXY from the environment"
-
-
-def should_bypass(host_or_url: str, no_proxy=_ENV, *, env: Optional[HTTPEnv] = None) -> bool:
-    """Does the bypass list say this host goes direct? ``no_proxy`` defaults
-    to the environment's ``NO_PROXY``/``no_proxy``; pass a list of your own
-    (curl's ``--noproxy`` REPLACES the environment's) or ``None`` for "never
-    bypass". Accepts a URL or a bare ``host[:port]``. A URL that does not
-    parse (``http://h:notaport/``) is not bypassed -- the HTTP stack reports
-    it on its own terms."""
-    if no_proxy is _ENV:
-        no_proxy = no_proxy_from_env(env=env)
-    if not no_proxy:
-        return False
-    if "://" in host_or_url:
-        parts = urlsplit(host_or_url)
-        host = parts.hostname or ""
-        try:
-            if parts.port is not None:
-                host = "%s:%d" % (host, parts.port)
-        except ValueError:
-            return False
-    else:
-        host = host_or_url
-    return bypassed_by(host, no_proxy)
-
-
-def proxies_from_env(*, env: Optional[HTTPEnv] = None) -> Optional[dict]:
-    """A ``requests``-style ``{"http": ..., "https": ...}`` dict of the configured
-    proxy URL (userinfo as configured), or ``None``. Note that a header value
-    from ``<P>_PROXY_AUTH`` cannot ride in a URL: :func:`session.new_session`
-    is what applies it; see :func:`resolve` for the two halves."""
-    p = proxy_url(env=env)
-    if not p:
+def configured_proxy(*, env: Optional[HTTPEnv] = None) -> Optional[Proxy]:
+    """``<P>_PROXY`` as a proxylib ``Proxy`` with its credential and kind, or
+    ``None`` when it is unset. ``<P>_PROXY_AUTH`` replaces the URL's
+    userinfo; ``<P>_PROXY_TYPE=prefix`` makes a gateway. A malformed value
+    raises ``ValueError`` (``ProxyParseError`` for the URL)."""
+    env = _env(env)
+    raw = env.get(PROXY)
+    if not raw:
         return None
-    return {"http": p, "https": p}
+    found = Proxy.parse(raw)
+    kind, endpoint = proxy_type(env=env)
+    if kind == "prefix":
+        if found.scheme not in ("http", "https"):
+            raise ValueError("%s=prefix needs an http or https %s" % (_var(env, PROXY_TYPE), _var(env, PROXY)))
+        found = Proxy("prefix+" + found.scheme, found.host, found.port, found.username, found.password, path=endpoint)
+    value = env.get(PROXY_AUTH)
+    return _with_credential(found, auth_header(env=env), value) if value else found
 
 
-class ProxyPlan:
-    """One proxy decision -- the session's adapter and a curl front end's
-    handler both apply it per hop.
+#: The conventional proxy variables, lower-cased. Not every ``*_PROXY``:
+#: ``<P>_PROXY`` and ``<P>_SYSTEM_PROXY`` are this package's settings.
+_PROXY_VARIABLES = frozenset(s + "_proxy" for s in ("http", "https", "ftp", "ws", "wss", "all"))
 
-    ``proxy`` -- the proxy URL without userinfo; ``authorization`` -- the
-    credential (the header value), or ``None``; ``auth_header`` -- the header
-    it rides in (:func:`auth_header`); ``endpoint`` -- ``None`` for a
-    ``connect`` proxy, the ``/endpoint`` of a prefix gateway; ``no_proxy`` --
-    the bypass list in force (curl's ``--noproxy`` REPLACES ``NO_PROXY``),
-    re-checked for every hop's host.
-    """
 
-    __slots__ = ("proxy", "authorization", "endpoint", "no_proxy", "auth_header")
+def _has_proxy_variable(environ: Mapping[str, str]) -> bool:
+    """Whether the environment names a proxy: then its variables alone decide
+    (as ``urllib.request.getproxies()`` does) and the system is not asked.
+    Under CGI an uppercase ``HTTP_PROXY`` is a request header (httpoxy)."""
+    cgi = "REQUEST_METHOD" in environ
+    for name, value in environ.items():
+        if not value or not value.strip() or name.lower() not in _PROXY_VARIABLES:
+            continue
+        if cgi and name == "HTTP_PROXY":
+            continue
+        return True
+    return False
 
-    def __init__(
-        self,
-        proxy: str,
-        authorization: Optional[str],
-        endpoint: Optional[str],
-        no_proxy: Optional[str],
-        auth_header: Optional[str] = None,
-    ) -> None:
+
+class _Quiet:
+    """The system's map with its failures as "no opinion": a configuration
+    that cannot be read or run is DIRECT, never a failed request."""
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+
+    def __getitem__(self, url: str) -> Any:
+        try:
+            return proxylib.lookup(self.inner, url)
+        except KeyError:
+            raise
+        except Exception as exc:
+            _log.debug("the system proxy configuration failed for a URL: %s", exc)
+            raise KeyError(url) from None
+
+    def close(self) -> None:
+        close = getattr(self.inner, "close", None)
+        if close is not None:
+            close()
+
+
+def system_map() -> Any:
+    """The system's proxy configuration as a proxylib ``ProxyMap``
+    (``proxylib.auto_proxy`` with no environment variables: the OS resolver,
+    then the OS settings), read once per :data:`SYSTEM_PROXY_MAX_AGE` seconds,
+    each URL's answer kept as long. ``None`` when it cannot be read (logged at
+    DEBUG). A URL it cannot answer raises ``KeyError``."""
+    global _system, _system_at
+    with _system_lock:
+        now = time.monotonic()
+        if _system_at and now - _system_at <= SYSTEM_PROXY_MAX_AGE:
+            return _system
+        try:
+            _system = proxylib.Cached(_Quiet(proxylib.auto_proxy(environ={})), ttl=SYSTEM_PROXY_MAX_AGE)
+        except Exception as exc:
+            _log.debug("the system proxy configuration could not be read: %s", exc)
+            _system = None
+        _system_at = now
+        return _system
+
+
+class _Credential:
+    """Every proxy ``inner`` answers, given ``Proxy-Authorization: value``
+    (SOCKS entries, which take no header, and DIRECT as they are)."""
+
+    def __init__(self, inner: Any, value: str) -> None:
+        self.inner = inner
+        self.value = value
+
+    def __getitem__(self, url: str) -> Tuple[Optional[Proxy], ...]:
+        return tuple(
+            (
+                entry
+                if entry is None or entry.scheme.startswith("socks")
+                else _with_credential(entry, DEFAULT_AUTH_HEADER, self.value)
+            )
+            for entry in proxylib.lookup(self.inner, url)
+        )
+
+
+class _SettingsMap:
+    """:func:`proxy_map`'s map: the settings read again at every lookup."""
+
+    def __init__(self, proxy: Optional[str], noproxy: Optional[str], proxy_user: Optional[str], env: Any) -> None:
         self.proxy = proxy
-        self.authorization = authorization
-        self.endpoint = endpoint
-        self.no_proxy = no_proxy
-        self.auth_header = auth_header or DEFAULT_AUTH_HEADER
+        self.noproxy = noproxy
+        self.proxy_user = proxy_user
+        self.env = env
 
-    def bypasses(self, url: str) -> bool:
-        return should_bypass(url, no_proxy=self.no_proxy)
+    def __repr__(self) -> str:
+        return "proxy_map(%s)" % ("proxy=%r" % Proxy.parse(self.proxy).url if self.proxy else "")
 
-    @property
-    def gateway_base(self) -> Optional[str]:
-        """``<proxy><endpoint>`` of a prefix gateway (a URL already in its
-        namespace starts with it), or ``None`` for a ``connect`` proxy."""
-        return prefix_url("", self.proxy, self.endpoint) if self.endpoint is not None else None
+    def _inner(self, env: HTTPEnv) -> Any:
+        if self.proxy is not None:
+            # curl's -x: always a plain proxy, its credential its own.
+            return proxylib.SimpleProxyMap(Proxy.parse(self.proxy) if self.proxy else None)
+        configured = configured_proxy(env=env)
+        if configured is not None:
+            return proxylib.SimpleProxyMap(configured)
+        environ: Mapping[str, str] = env.environ
+        if self.noproxy is not None:
+            # --noproxy replaces NO_PROXY; the variables' map must not apply it.
+            environ = {k: v for k, v in environ.items() if k.lower() != "no_proxy"}
+        machine: Any = None
+        if _has_proxy_variable(environ) or not system_proxy_enabled(env=env):
+            machine = proxylib.EnvProxyConfig(environ)
+        else:
+            machine = system_map()
+        chain = proxylib.ChainProxyMap(*(m for m in (machine, proxylib.SimpleProxyMap()) if m is not None))
+        value = env.conventional(MACHINE_AUTH_VAR)
+        return _Credential(chain, value) if value else chain
+
+    def _no_proxy(self, env: HTTPEnv) -> Optional[str]:
+        return self.noproxy if self.noproxy is not None else env.conventional("NO_PROXY", "no_proxy")
+
+    def __getitem__(self, url: str) -> Tuple[Optional[Proxy], ...]:
+        env = _env(self.env)
+        inner = self._inner(env)
+        no_proxy = self._no_proxy(env)
+        if no_proxy:
+            inner = proxylib.Bypass(inner, no_proxy)
+        answer = proxylib.lookup(inner, url)
+        if self.proxy_user is not None:
+            answer = tuple(None if entry is None else _with_user(entry, self.proxy_user) for entry in answer)
+        return answer
+
+    def close(self) -> None:
+        """Nothing to free: the system's map is shared."""
 
 
-def plan(
+def proxy_map(
     proxy: Optional[str] = None,
     noproxy: Optional[str] = None,
     proxy_user: Optional[str] = None,
     *,
-    url: Optional[str] = None,
     env: Optional[HTTPEnv] = None,
-) -> Optional[ProxyPlan]:
-    """The :class:`ProxyPlan` for a request to ``url``, or ``None`` for direct.
+) -> Any:
+    """syshttp's routing as a proxylib ``ProxyMap`` (``proxylib.lookup(m,
+    url)`` reads it; every proxylib integration takes it). The settings are
+    read at every lookup, so one map serves a long-lived client. It always
+    answers (never ``KeyError``).
 
-    ``proxy`` (curl's ``-x``) wins over the configured chain (``<P>_PROXY``,
-    then the global vars, then -- for ``url``, outside the bypass list -- the
-    system's configuration) and is always a plain ``connect`` proxy whose
-    credential is its own userinfo or ``proxy_user`` (``-U``, as Basic) --
-    never the configured proxy's ``<P>_PROXY_AUTH``. For the configured
-    proxy, ``proxy_user`` wins over the configured header value, which wins
-    over the URL's userinfo. ``noproxy`` replaces ``NO_PROXY``. A malformed
-    ``<P>_PROXY`` or ``<P>_PROXY_TYPE`` raises ``ValueError`` (a
-    configuration error, only when that proxy would actually be used).
-    """
-    no_proxy = noproxy if noproxy is not None else no_proxy_from_env(env=env)
-    endpoint: Optional[str] = None
-    if proxy:
-        resolved = resolve(proxy, configured=False, env=env)
-    elif configured_proxy_url(env=env):
-        resolved = resolve(env=env)
-        endpoint = proxy_type(env=env)[1]
-    elif url and not should_bypass(url, no_proxy):
-        resolved = resolve(target=url, env=env)  # the system's choice: connect
-    else:
-        resolved = None
-    if not resolved:
-        return None
-    url, authorization = resolved
-    if proxy_user:
-        user, _, password = proxy_user.partition(":")
-        authorization = basic_authorization(user, password)
-    return ProxyPlan(url, authorization, endpoint, no_proxy, auth_header(env=env))
+    ``proxy`` (curl's ``-x``) replaces the settings with that proxy, always a
+    plain one whose credential is its own userinfo, never the configured
+    ``<P>_PROXY_AUTH``; ``""`` means direct. ``noproxy`` (``--noproxy``)
+    replaces ``NO_PROXY``. ``proxy_user`` (``-U user:password``) becomes the
+    credential of whichever proxy answers, replacing the configured one. A
+    malformed setting raises ``ValueError`` at lookup, only when it would be
+    used."""
+    return _SettingsMap(proxy, noproxy, proxy_user, env)

@@ -28,14 +28,14 @@ classifiers = [
 dependencies = [
     # The system's proxy configuration (WinHTTP, macOS, libproxy/desktops; PAC
     # and WPAD) is the default route when no proxy variable is set.
-    "proxylib>=1.0,<2",
+    "proxylib>=2.0,<3",
     # The system's TLS client: the OS verifies certificates (through
     # truststore on Python 3.10+) and a server asking for a client certificate
     # gets one from the OS store, chosen as a browser would.
     "sslcontext>=2.0.0,<3",
-    # Patches requests, urllib, httpx and aiohttp as they are imported, when
-    # <P>_IMPORTPATCH asks for it (syshttp.autopatch, the entry points below).
-    "importpatch>=0.2,<0.3",
+    # Patches requests, urllib, httpx, aiohttp and pip as they are imported, when
+    # <PREFIX>_SYSHTTP_IMPORTPATCH asks for it (syshttp.autopatch, the entry points below).
+    "importpatch>=0.2.1,<0.3",
 ]
 
 [project.entry-points.importpatch]
@@ -43,6 +43,7 @@ requests = "syshttp.autopatch"
 "urllib.request" = "syshttp.autopatch"
 httpx = "syshttp.autopatch"
 aiohttp = "syshttp.autopatch"
+"pip._vendor.requests" = "syshttp.autopatch"
 
 [project.optional-dependencies]
 # requests backs syshttp.session and syshttp.fetch only, imported when a
@@ -50,7 +51,7 @@ aiohttp = "syshttp.autopatch"
 session = ["requests>=2.25,<3"]
 # A JavaScript engine for PAC scripts proxylib evaluates itself (Linux without
 # libproxy); Windows and macOS evaluate PAC in the OS.
-pac = ["proxylib[quickjs]>=1.0,<2"]
+pac = ["proxylib[pac]>=2.0,<3"]
 # The tests exercise every extra, so dev refers to them rather than repeating
 # their ranges.
 # httpx and aiohttp are what syshttp.autopatch patches; the tests use them.

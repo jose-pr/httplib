@@ -1,24 +1,20 @@
 """Patch HTTP client libraries as they are imported, so they route and verify
-the way syshttp does: ``<P>_PROXY``, the ``*_PROXY`` variables, ``NO_PROXY``
-and the system's proxy configuration (:func:`syshttp.proxy.plan`), and the
-system's TLS context (:func:`syshttp.tls.os_ssl_context`).
+the way syshttp does: routing by :func:`syshttp.proxy.proxy_map` through
+proxylib's client integrations (``proxylib.patch``), and TLS by the system's
+context (:func:`syshttp.tls.os_ssl_context`).
 
 ``SYSHTTP_IMPORTPATCH`` chooses the libraries -- ``<PREFIX>_SYSHTTP_IMPORTPATCH``
 under a prefix of a tool's own (``SYSHTTP_PREFIX=AGENTS``:
 ``AGENTS_SYSHTTP_IMPORTPATCH``): ``1``/``true``/``yes``/``on`` for all of
 :data:`TARGETS`, ``0``/``false``/``no``/``off``, empty or unset for none, else
-their names separated by ``:`` (``requests:httpx``; ``urllib.request`` is
-``urllib``). It is read when
-the library is imported: importpatch (a dependency) calls :func:`importpatch`
-for each target, through this distribution's ``importpatch`` entry points.
-:func:`patch` applies the same patches from code, whatever the setting says.
+their names separated by ``:`` (``requests:httpx``; a module name such as
+``urllib.request`` works too). It is read when the library is imported:
+importpatch (a dependency) calls :func:`importpatch` for each target, through
+this distribution's ``importpatch`` entry points. :func:`patch` applies the
+same patches from code, whatever the setting says.
 
 What the caller chose always wins: a proxy given to the client, a context, a
-CA bundle or ``verify=False``. A request with no proxy of the caller's is
-routed by syshttp; with verification on and no TLS settings of the caller's,
-it is verified with the system's context. When no proxy the system names is
-reachable (and its list holds no DIRECT), the client's own proxy error is
-raised.
+CA bundle or ``verify=False``.
 """
 
 from __future__ import annotations
@@ -30,8 +26,9 @@ import ssl
 import threading
 import time
 from types import ModuleType
-from typing import Any, Callable, Dict, FrozenSet, Iterable, Optional, Tuple
-from urllib.parse import urlsplit
+from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Tuple
+
+import proxylib
 
 from . import proxy as _proxy
 from . import tls as _tls
@@ -48,6 +45,7 @@ TARGETS: Dict[str, str] = {
     "urllib": "urllib.request",
     "httpx": "httpx",
     "aiohttp": "aiohttp",
+    "pip": "pip._vendor.requests",
 }
 
 _log = logging.getLogger(__name__)
@@ -55,8 +53,8 @@ _TRUE = ("1", "true", "yes", "on")
 _FALSE = ("", "0", "false", "no", "off")
 _BY_MODULE = {module: name for name, module in TARGETS.items()}
 _lock = threading.RLock()
-# name -> the function that undoes its patch, in the order applied.
-_undo: Dict[str, Callable[[], None]] = {}
+# name -> the functions that undo its patch, in the order applied.
+_undo: Dict[str, List[Callable[[], None]]] = {}
 
 
 def setting_name(*, env: Optional[HTTPEnv] = None) -> str:
@@ -123,10 +121,12 @@ def patch(targets: Optional[Iterable[str]] = None) -> Tuple[str, ...]:
 
 def unpatch() -> None:
     """Undo every patch, the last applied first. A client built while patched
-    keeps what it was given."""
+    keeps what it was given; proxylib's integrations stay installed, back on
+    proxylib's default map."""
     with _lock:
         for name in reversed(list(_undo)):
-            _undo.pop(name)()
+            for step in reversed(_undo.pop(name)):
+                step()
 
 
 def patched() -> Tuple[str, ...]:
@@ -137,8 +137,21 @@ def patched() -> Tuple[str, ...]:
 
 def _apply(name: str, module: ModuleType) -> None:
     with _lock:
-        if name not in _undo:
-            _undo[name] = _PATCHERS[name](module)
+        if name in _undo:
+            return
+        steps: List[Callable[[], None]] = []
+        route = _ROUTES[name]
+        if route is not None:
+            if name in proxylib.patching.targets():
+                # Before the TLS patch: syshttp's wrappers then run first and
+                # hand proxylib's transports the system context.
+                steps.append(proxylib.patch(route(), targets=[name]).undo)
+            else:
+                _log.debug("proxylib %s has no %r patch target: %s is not routed", proxylib.__version__, name, name)
+        tls = _TLS[name]
+        if tls is not None:
+            steps.append(tls(module))
+        _undo[name] = steps
 
 
 def _context(certificate: bool = False) -> ssl.SSLContext:
@@ -149,32 +162,80 @@ def _context(certificate: bool = False) -> ssl.SSLContext:
     return _tls.os_ssl_context()
 
 
-# ---- requests ----------------------------------------------------------------
+# ---- routing -----------------------------------------------------------------
 
 
-def _patch_requests(requests: ModuleType) -> Callable[[], None]:
-    """Every new ``requests.Session`` mounts syshttp's adapter for ``http://``
-    and ``https://``: per-request routing, the system's context for
-    ``verify=True``. A proxy the caller chose, or ``trust_env = False``, is
-    sent as requests would."""
-    from .session import _proxy_adapter_class
+class _URLErrorMap:
+    """urllib sends through one proxy: the first reachable one (``Probed``),
+    with none reachable reported as urllib reports a connection failure."""
 
-    adapter_class = _proxy_adapter_class(requests.adapters.HTTPAdapter)
-    session_class = requests.Session
-    original = session_class.__init__
+    def __init__(self, inner: Any) -> None:
+        self.inner = proxylib.Probed(inner)
 
-    @functools.wraps(original)
-    def __init__(self: Any, *args: Any, **kwargs: Any) -> None:
-        original(self, *args, **kwargs)
-        adapter = adapter_class(dynamic=True, caller_proxies=True, session=self, env=HTTPEnv())
-        self.mount("https://", adapter)
-        self.mount("http://", adapter)
+    def __getitem__(self, url: str) -> Any:
+        from urllib.error import URLError
 
-    session_class.__init__ = __init__
-    return lambda: setattr(session_class, "__init__", original)
+        try:
+            return proxylib.lookup(self.inner, url)
+        except proxylib.NoReachableProxyError as exc:
+            raise URLError(exc) from exc
 
 
-# ---- urllib ------------------------------------------------------------------
+_ROUTES: Dict[str, Optional[Callable[[], Any]]] = {
+    "requests": _proxy.proxy_map,
+    "urllib": lambda: _URLErrorMap(_proxy.proxy_map()),
+    "httpx": _proxy.proxy_map,
+    "aiohttp": _proxy.proxy_map,
+    "pip": _proxy.proxy_map,
+}
+
+
+# ---- TLS: requests -----------------------------------------------------------
+
+
+def _tls_requests(requests: ModuleType) -> Callable[[], None]:
+    """Every ``HTTPAdapter`` -- proxylib's included -- verifies an https
+    origin with the system's context when ``verify`` is ``True`` and the
+    adapter's pool manager was given no context of its own."""
+    adapter_class = requests.adapters.HTTPAdapter
+    original_key = getattr(adapter_class, "build_connection_pool_key_attributes", None)
+    if original_key is None:
+        _log.debug("requests %s has no pool-key hook: its own verification stays", requests.__version__)
+        return lambda: None
+    original_verify = adapter_class.cert_verify
+
+    def ours(adapter: Any, url: str, verify: Any) -> bool:
+        pool = getattr(adapter, "poolmanager", None)
+        own = getattr(pool, "connection_pool_kw", {}).get("ssl_context")
+        return verify is True and own is None and url.lower().startswith("https")
+
+    @functools.wraps(original_key)
+    def build_connection_pool_key_attributes(self: Any, request: Any, verify: Any, cert: Any = None) -> Any:
+        host_params, pool_kwargs = original_key(self, request, verify, cert)
+        if ours(self, request.url or "", verify) and "ssl_context" not in pool_kwargs:
+            pool_kwargs["ssl_context"] = _context()
+        return host_params, pool_kwargs
+
+    @functools.wraps(original_verify)
+    def cert_verify(self: Any, conn: Any, url: str, verify: Any, cert: Any) -> None:
+        if ours(self, url, verify):
+            # No CA file: urllib3 would load it into the shared system context.
+            original_verify(self, conn, url, False, cert)
+            conn.cert_reqs = "CERT_REQUIRED"
+            return
+        original_verify(self, conn, url, verify, cert)
+
+    setattr(adapter_class, "build_connection_pool_key_attributes", build_connection_pool_key_attributes)
+    setattr(adapter_class, "cert_verify", cert_verify)
+
+    def undo() -> None:
+        setattr(adapter_class, "build_connection_pool_key_attributes", original_key)
+        setattr(adapter_class, "cert_verify", original_verify)
+
+    return undo
+
+
+# ---- TLS: urllib -------------------------------------------------------------
 
 # One context for http.client's default: it sets ALPN on the context it is
 # handed, so it does not share the requests session's.
@@ -192,167 +253,35 @@ def _default_https_context() -> ssl.SSLContext:
         return _https_context
 
 
-def _patch_urllib(request: ModuleType) -> Callable[[], None]:
-    """``urllib.request.ProxyHandler`` built without proxies (as every
-    default opener builds it) routes each request and redirect hop by
-    syshttp; one built with a mapping is the standard one. ``http.client``'s
-    default HTTPS context (``ssl._create_default_https_context``) becomes the
-    system's, for urllib and every other caller that gives none."""
-    from urllib.error import URLError
-
-    original_handler = request.ProxyHandler
-
-    class SystemProxyHandler(original_handler):  # type: ignore[misc, valid-type]
-        def __init__(self, proxies: Optional[Dict[str, str]] = None) -> None:
-            self.system = proxies is None
-            super().__init__({} if proxies is None else proxies)
-
-        def _route(self, req: Any) -> Any:
-            if not self.system:
-                return req
-            try:
-                plan = _proxy.plan(url=req.full_url)
-            except _proxy.NoReachableProxyError as exc:
-                raise URLError(exc) from exc
-            if plan is None or plan.bypasses(req.full_url):
-                return req
-            if plan.endpoint is not None:
-                if not req.full_url.startswith(plan.gateway_base or "\0"):
-                    req.full_url = _proxy.prefix_url(req.full_url, plan.proxy, plan.endpoint)
-                if plan.authorization:
-                    req.add_unredirected_header(plan.auth_header, plan.authorization)
-                return req
-            if req.type == "https" and plan.authorization and plan.auth_header.lower() != "proxy-authorization":
-                # urllib moves only Proxy-Authorization onto the CONNECT; any
-                # other header would travel through the tunnel to the origin.
-                raise URLError(
-                    "%s cannot be sent to an https proxy by urllib; use requests or httpx" % plan.auth_header
-                )
-            parts = urlsplit(plan.proxy)
-            req.set_proxy(parts.netloc, parts.scheme)
-            if plan.authorization:
-                req.add_unredirected_header(plan.auth_header, plan.authorization)
-            return req
-
-        http_request = _route
-        https_request = _route
-
-    SystemProxyHandler.__name__ = SystemProxyHandler.__qualname__ = "ProxyHandler"
-    SystemProxyHandler.__module__ = request.__name__
-    original_context = ssl._create_default_https_context  # type: ignore[attr-defined]
-    setattr(request, "ProxyHandler", SystemProxyHandler)
+def _tls_urllib(request: ModuleType) -> Callable[[], None]:
+    """``http.client``'s default HTTPS context (``ssl._create_default_https_context``)
+    becomes the system's, for urllib and every other caller that gives none."""
+    original = ssl._create_default_https_context  # type: ignore[attr-defined]
     setattr(ssl, "_create_default_https_context", _default_https_context)
-
-    def undo() -> None:
-        setattr(request, "ProxyHandler", original_handler)
-        setattr(ssl, "_create_default_https_context", original_context)
-
-    return undo
+    return lambda: setattr(ssl, "_create_default_https_context", original)
 
 
-# ---- httpx -------------------------------------------------------------------
+# ---- TLS: httpx --------------------------------------------------------------
 
 
-def _patch_httpx(httpx: ModuleType) -> Callable[[], None]:
-    """``httpx.Client`` and ``AsyncClient`` built without ``transport``,
-    ``proxy`` or ``mounts`` (and with ``trust_env``) get a transport that
-    routes each request by syshttp; ``verify`` left at ``True`` becomes the
-    system's context."""
+def _tls_httpx(httpx: ModuleType) -> Callable[[], None]:
+    """``httpx.Client`` / ``AsyncClient`` built with ``verify`` left at
+    ``True`` verify with the system's context (a fresh one offering no store
+    certificate when ``cert=`` is given)."""
 
-    def routed(request: Any, plan: Optional[_proxy.ProxyPlan]) -> Tuple[Any, Any]:
-        """``(key, request)``: the inner transport to use and the request to
-        send through it."""
-        url = str(request.url)
-        if plan is None or plan.bypasses(url):
-            return None, request
-        if plan.endpoint is None:
-            return (plan.proxy, plan.auth_header, plan.authorization), request
-        target = url if url.startswith(plan.gateway_base or "\0") else _proxy.prefix_url(url, plan.proxy, plan.endpoint)
-        headers = [(k, v) for k, v in request.headers.raw if k.lower() != b"host"]
-        if plan.authorization:
-            headers.append((plan.auth_header.encode("latin-1"), plan.authorization.encode("latin-1")))
-        rewritten = httpx.Request(
-            request.method, target, headers=headers, stream=request.stream, extensions=request.extensions
-        )
-        return None, rewritten
-
-    def proxy_for(key: Any) -> Any:
-        url, header, authorization = key
-        return httpx.Proxy(url, headers={header: authorization} if authorization else None)
-
-    class SystemTransport(httpx.BaseTransport):  # type: ignore[misc, name-defined]
-        def __init__(self, **kwargs: Any) -> None:
-            self._kwargs = kwargs
-            self._inner: Dict[Any, Any] = {}
-            self._lock = threading.Lock()
-
-        def _transport(self, key: Any) -> Any:
-            with self._lock:
-                if key not in self._inner:
-                    proxy = None if key is None else proxy_for(key)
-                    self._inner[key] = httpx.HTTPTransport(proxy=proxy, **self._kwargs)
-                return self._inner[key]
-
-        def handle_request(self, request: Any) -> Any:
-            try:
-                plan = _proxy.plan(url=str(request.url))
-            except _proxy.NoReachableProxyError as exc:
-                raise httpx.ProxyError(str(exc), request=request) from exc
-            key, request = routed(request, plan)
-            return self._transport(key).handle_request(request)
-
-        def close(self) -> None:
-            with self._lock:
-                inner, self._inner = list(self._inner.values()), {}
-            for transport in inner:
-                transport.close()
-
-    class AsyncSystemTransport(httpx.AsyncBaseTransport):  # type: ignore[misc, name-defined]
-        def __init__(self, **kwargs: Any) -> None:
-            self._kwargs = kwargs
-            self._inner: Dict[Any, Any] = {}
-
-        def _transport(self, key: Any) -> Any:
-            if key not in self._inner:
-                proxy = None if key is None else proxy_for(key)
-                self._inner[key] = httpx.AsyncHTTPTransport(proxy=proxy, **self._kwargs)
-            return self._inner[key]
-
-        async def handle_async_request(self, request: Any) -> Any:
-            import anyio
-
-            # The system's answer can take a PAC evaluation or a probe: off the loop.
-            try:
-                plan = await anyio.to_thread.run_sync(functools.partial(_proxy.plan, url=str(request.url)))
-            except _proxy.NoReachableProxyError as exc:
-                raise httpx.ProxyError(str(exc), request=request) from exc
-            key, request = routed(request, plan)
-            return await self._transport(key).handle_async_request(request)
-
-        async def aclose(self) -> None:
-            inner, self._inner = list(self._inner.values()), {}
-            for transport in inner:
-                await transport.aclose()
-
-    def wrap(client_class: Any, transport_class: Any) -> Callable[[], None]:
+    def wrap(client_class: Any) -> Callable[[], None]:
         original = client_class.__init__
 
         @functools.wraps(original)
         def __init__(self: Any, *args: Any, **kwargs: Any) -> None:
             if kwargs.get("verify", True) is True:
                 kwargs["verify"] = _context(certificate=kwargs.get("cert") is not None)
-            routed_by_caller = any(kwargs.get(k) is not None for k in ("transport", "proxy", "proxies", "mounts"))
-            if not routed_by_caller and kwargs.get("trust_env", True):
-                inner = {
-                    k: kwargs[k] for k in ("verify", "cert", "http1", "http2", "limits", "trust_env") if k in kwargs
-                }
-                kwargs["transport"] = transport_class(**inner)
             original(self, *args, **kwargs)
 
         client_class.__init__ = __init__
         return lambda: setattr(client_class, "__init__", original)
 
-    steps = [wrap(httpx.Client, SystemTransport), wrap(httpx.AsyncClient, AsyncSystemTransport)]
+    steps = [wrap(httpx.Client), wrap(httpx.AsyncClient)]
 
     def undo() -> None:
         for step in reversed(steps):
@@ -361,15 +290,13 @@ def _patch_httpx(httpx: ModuleType) -> Callable[[], None]:
     return undo
 
 
-# ---- aiohttp -----------------------------------------------------------------
+# ---- TLS: aiohttp ------------------------------------------------------------
 
 
-def _patch_aiohttp(aiohttp: ModuleType) -> Callable[[], None]:
-    """``ClientSession`` requests with no ``proxy=`` are routed by syshttp
-    (aiohttp reads no proxy of its own unless ``trust_env``); ``ssl`` left at
-    ``True`` with no other TLS argument becomes the system's context."""
-    import asyncio
-
+def _tls_aiohttp(aiohttp: ModuleType) -> Callable[[], None]:
+    """``ClientSession`` requests with ``ssl`` left at ``True`` and no
+    ``ssl_context`` / ``verify_ssl`` / ``fingerprint`` verify with the
+    system's context."""
     session_class = aiohttp.ClientSession
     original = session_class._request
 
@@ -379,36 +306,17 @@ def _patch_aiohttp(aiohttp: ModuleType) -> Callable[[], None]:
             kwargs.get(k) is None for k in ("ssl_context", "verify_ssl", "fingerprint")
         ):
             kwargs["ssl"] = _context()
-        if kwargs.get("proxy") is None:
-            build = getattr(self, "_build_url", None)
-            url = str(build(str_or_url) if build is not None else str_or_url)
-            loop = asyncio.get_running_loop()
-            try:
-                plan = await loop.run_in_executor(None, functools.partial(_proxy.plan, url=url))
-            except _proxy.NoReachableProxyError as exc:
-                raise aiohttp.ClientConnectionError(str(exc)) from exc
-            if plan is not None and not plan.bypasses(url):
-                if plan.endpoint is not None:
-                    if not url.startswith(plan.gateway_base or "\0"):
-                        str_or_url = _proxy.prefix_url(url, plan.proxy, plan.endpoint)
-                    if plan.authorization:
-                        kwargs["headers"] = {**dict(kwargs.get("headers") or {}), plan.auth_header: plan.authorization}
-                else:
-                    kwargs["proxy"] = plan.proxy
-                    # aiohttp sends proxy_headers on the CONNECT only; a plain
-                    # http request goes to the proxy itself, every hop of it.
-                    where = "proxy_headers" if urlsplit(url).scheme == "https" else "headers"
-                    if plan.authorization:
-                        kwargs[where] = {**dict(kwargs.get(where) or {}), plan.auth_header: plan.authorization}
         return await original(self, method, str_or_url, **kwargs)
 
     session_class._request = _request
     return lambda: setattr(session_class, "_request", original)
 
 
-_PATCHERS: Dict[str, Callable[[ModuleType], Callable[[], None]]] = {
-    "requests": _patch_requests,
-    "urllib": _patch_urllib,
-    "httpx": _patch_httpx,
-    "aiohttp": _patch_aiohttp,
+_TLS: Dict[str, Optional[Callable[[ModuleType], Callable[[], None]]]] = {
+    "requests": _tls_requests,
+    "urllib": _tls_urllib,
+    "httpx": _tls_httpx,
+    "aiohttp": _tls_aiohttp,
+    # pip verifies with its own truststore context, which is kept.
+    "pip": None,
 }

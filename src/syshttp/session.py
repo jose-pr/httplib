@@ -1,12 +1,11 @@
-"""Build a configured ``requests.Session`` with retry/backoff, the configured proxy
-(credential, kind and ``NO_PROXY`` bypass, all decided in ONE adapter), and
-transparent cookie/token load-save + per-host auth.
+"""Build a configured ``requests.Session`` with retry/backoff, routing by
+:func:`proxy.proxy_map` (in ONE adapter, proxylib's ``ProxyMapAdapter`` with
+the system's TLS), and transparent cookie/token load-save + per-host auth.
 
 Cookies and tokens are always chosen by the host of the URL the caller asked
 for -- the origin -- never by the proxy's or the gateway's: the jars are read
-before the adapter sees the request, the adapter rewrites a COPY, and what
-comes back is attributed to the origin again (``response.url``,
-``response.request``, ``response.cookies``). A token is a per-request
+before the adapter sees the request, and a gateway's response keeps the
+caller's request and URL. A token is a per-request
 ``Authorization`` header (``Bearer <value>``, or the value verbatim when it
 already names a scheme), never a session header, so it cannot leak to another
 host; an explicit header or ``auth=`` wins.
@@ -36,7 +35,7 @@ from __future__ import annotations
 import re
 import ssl
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterable, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Iterable, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 from . import hooks as _hooks
@@ -46,10 +45,6 @@ from .env import HTTPEnv
 from .jar import CookieJar, FileCookieJar, FileTokenJar, TokenJar
 from .retry import TRANSIENT_STATUSES
 from .tls import OS_CONTEXT_MAX_AGE, os_ssl_context  # noqa: F401  (re-exported: session's own API)
-
-# The module, not its functions: `should_bypass`'s default sentinel belongs
-# to the module instance, and a function bound by name before a reload
-# would pass a stale one.
 from . import proxy as _proxy
 from .warnings import disable_insecure_request_warnings
 
@@ -69,76 +64,47 @@ def _import_requests():
     return requests, HTTPAdapter, Retry
 
 
-def _proxy_adapter_class(HTTPAdapter):
-    """The one adapter that owns every proxy decision, built lazily on the
-    lazily imported ``HTTPAdapter``. ``HTTPAdapter.send(request, proxies=...)``
-    is the single point every request -- ``session.get``, a bare
-    ``session.send``, and every redirect hop -- passes through, so this is the
-    layer requests designed for it; a ``session.request`` wrapper would miss
-    the last two."""
-    import weakref
+def _proxy_adapter_class():
+    """The one adapter that owns every proxy decision: proxylib's
+    ``ProxyMapAdapter`` (built on the lazily imported requests) with the
+    system's TLS. ``HTTPAdapter.send`` is the single point every request --
+    ``session.get``, a bare ``session.send``, and every redirect hop -- passes
+    through."""
+    import proxylib
 
-    from requests.cookies import RequestsCookieJar, extract_cookies_to_jar
-    from requests.utils import get_environ_proxies, select_proxy
-
-    class ProxyAdapter(HTTPAdapter):
-        """``proxy`` (userinfo-free URL) + ``authorization`` (the
-        ``Proxy-Authorization`` value) + ``endpoint`` (``None`` for a
-        ``connect`` proxy, the ``/endpoint`` of a prefix gateway).
-
-        * ``NO_PROXY`` hosts go direct, and never see the credential.
-        * ``connect``: the proxy is passed EXPLICITLY per request, so the global
-          ``HTTP_PROXY``/``HTTPS_PROXY`` that ``trust_env`` would otherwise merge
-          in cannot win over the configured proxy -- and the credential is added by
-          ``proxy_headers`` only for THIS proxy, so it can never reach another.
-          That hook covers the plain-http request and the https ``CONNECT``; a
-          header on the session would reach the origin inside the tunnel instead.
-        * ``prefix``: the request goes directly to ``<proxy><endpoint><url>`` with
-          the credential as a header of that request.
-
-        Every send works on a COPY of the prepared request: requests builds
-        redirect hops from the caller's object, so mutating it would carry the
-        gateway URL and the credential into the next hop -- which may be a
-        ``NO_PROXY`` origin. The response reports the caller's URL, so
-        redirects, cookies and history speak the URL the caller asked for.
-
-        ``caller_proxies`` (a session patched by :mod:`.autopatch`): a proxy
-        the caller chose -- one the environment would not have picked -- or
-        a ``session`` whose ``trust_env`` is off is sent as requests would,
-        TLS aside.
-        """
+    class ProxyAdapter(proxylib.ProxyMapAdapter):  # type: ignore[misc,valid-type]
+        """``proxymap`` (default :func:`proxy.proxy_map` for ``env``) routes
+        each request: entries tried in order, the next on a connection
+        failure, a proxy's headers sent to it only, a URL-prefix gateway
+        asked for ``<gateway><URL>`` with the response kept on the caller's
+        URL (proxylib). ``ssl_context`` / ``proxy_ssl_context``: the caller's
+        TLS for every https origin / https proxy; without them ``verify=True``
+        verifies with ``tls.os_ssl_context()``."""
 
         def __init__(
             self,
+            proxymap: Any = None,
             *,
-            proxy: Optional[str] = None,
-            authorization: Optional[str] = None,
-            endpoint: Optional[str] = None,
-            auth_header: Optional[str] = None,
             env: Optional[HTTPEnv] = None,
             ssl_context: "Optional[ssl.SSLContext]" = None,
             proxy_ssl_context: "Optional[ssl.SSLContext]" = None,
-            dynamic: bool = False,
-            caller_proxies: bool = False,
-            session: Any = None,
             **kwargs: Any,
         ) -> None:
             # Set before HTTPAdapter.__init__, which builds the pool manager.
             self.ssl_context = ssl_context
             self.proxy_ssl_context = proxy_ssl_context
-            super().__init__(**kwargs)
-            self.env = env
-            self.dynamic = dynamic
-            self.caller_proxies = caller_proxies
-            self._session = weakref.ref(session) if session is not None else None
-            self.proxy = proxy
-            self.authorization = authorization
-            self.endpoint = endpoint
-            self.auth_header = auth_header or _proxy.DEFAULT_AUTH_HEADER
-            # (header, value) per proxy URL, for proxy_headers.
-            self._credentials: Dict[str, Tuple[str, str]] = {}
-            if proxy and authorization:
-                self._credentials[self._key(proxy)] = (self.auth_header, authorization)
+            super().__init__(_proxy.proxy_map(env=env) if proxymap is None else proxymap, **kwargs)
+
+        def route(self, url: str) -> "Tuple[Any, ...]":
+            """The proxy map's answer for ``url``: proxylib ``Proxy`` entries
+            to try in order, ``None`` for DIRECT; ``()`` when the map has no
+            opinion and requests decides from ``proxies``."""
+            import proxylib as _proxylib
+
+            try:
+                return _proxylib.lookup(self.proxymap, url)
+            except KeyError:
+                return ()
 
         def build_connection_pool_key_attributes(self, request, verify, cert=None):
             """Over https: the caller's ``ssl_context`` when there is one,
@@ -181,88 +147,6 @@ def _proxy_adapter_class(HTTPAdapter):
                 return
             super().cert_verify(conn, url, verify, cert)
 
-        @staticmethod
-        def _key(proxy: str) -> str:
-            # requests lower-cases the proxy URL it hands back to proxy_headers.
-            return proxy.rstrip("/").lower()
-
-        def proxy_headers(self, proxy: str) -> Dict[str, str]:
-            headers = super().proxy_headers(proxy)
-            credential = self._credentials.get(self._key(proxy))
-            if credential is None and self.dynamic:
-                # Not yet routed through: the configured proxy's own credential.
-                configured = _proxy.resolve(env=self.env)
-                if configured and configured[1] and self._key(configured[0]) == self._key(proxy):
-                    credential = (_proxy.auth_header(env=self.env), configured[1])
-            if credential:
-                headers[credential[0]] = credential[1]
-            return headers
-
-        def _callers_choice(self, url: str, proxies: Optional[Dict[str, str]]) -> bool:
-            """Whether the caller, not syshttp, routes ``url``: its session
-            ignores the environment, or the proxy requests selected is not the
-            one the environment names (requests merges both into ``proxies``)."""
-            owner = self._session() if self._session is not None else None
-            if owner is not None and not owner.trust_env:
-                return True
-            given = select_proxy(url, proxies or {})
-            return bool(given) and given != select_proxy(url, get_environ_proxies(url))
-
-        def route(self, url: str) -> "Optional[_proxy.ProxyPlan]":
-            """The plan for one hop: decided again for every request (the
-            environment as it is now, and the system's answer for this URL)
-            unless the session was given fixed proxies."""
-            if self.dynamic:
-                return _proxy.plan(url=url, env=self.env)
-            if not self.proxy:
-                return None
-            return _proxy.ProxyPlan(self.proxy, self.authorization, self.endpoint, None, self.auth_header)
-
-        def send(self, request: "requests.PreparedRequest", **kwargs: Any) -> "requests.Response":
-            original = request.url or ""
-            if self.caller_proxies and self._callers_choice(original, kwargs.get("proxies")):
-                return super().send(request, **kwargs)
-            try:
-                route = self.route(original)
-            except _proxy.NoReachableProxyError as exc:
-                from requests.exceptions import ProxyError
-
-                raise ProxyError(str(exc), request=request) from exc
-            if route is None:
-                if self.dynamic:
-                    kwargs["proxies"] = {}  # decided: direct (trust_env must not re-add a proxy)
-                return super().send(request, **kwargs)
-            caller_request = request
-            request = request.copy()
-            if _proxy.should_bypass(original, env=self.env):
-                kwargs["proxies"] = {}
-                return super().send(request, **kwargs)
-            if route.authorization:
-                self._credentials[self._key(route.proxy)] = (route.auth_header, route.authorization)
-            if route.endpoint is None:
-                kwargs["proxies"] = {"http": route.proxy, "https": route.proxy}
-                return super().send(request, **kwargs)
-            # Prefix gateway. A Location the gateway wrote in its own namespace
-            # is already prefixed: never wrap it twice.
-            if not original.startswith(route.gateway_base or "\0"):
-                request.url = _proxy.prefix_url(original, route.proxy, route.endpoint)
-            if route.authorization:
-                request.headers[route.auth_header] = route.authorization
-            kwargs["proxies"] = {}
-            response = super().send(request, **kwargs)
-            response.url = original
-            # The response speaks the caller's request too, not the transport
-            # copy: `Session.resolve_redirects` compares `response.request.url`
-            # with the next hop to decide whether `Authorization` survives,
-            # and the per-response cookies must be extracted against the
-            # origin host, not the gateway's, so a `Set-Cookie` is filed under
-            # the origin.
-            response.request = caller_request
-            jar = RequestsCookieJar()
-            extract_cookies_to_jar(jar, caller_request, response.raw)
-            response.cookies = jar
-            return response
-
     return ProxyAdapter
 
 
@@ -297,7 +181,7 @@ def new_session(
     disable_insecure_request_warnings()
     # Not `requests`: that name is the TYPE_CHECKING import the annotations
     # below refer to, and a local of the same name would shadow it.
-    requests_mod, HTTPAdapter, Retry = _import_requests()
+    requests_mod, _, Retry = _import_requests()
     session = requests_mod.Session()
     cookie_jar: Optional[CookieJar] = None
     cookie_key: Optional[str] = None
@@ -327,30 +211,20 @@ def new_session(
         backoff_factor=backoff,
         status_forcelist=list(status_forcelist),
     )
-    proxy_url: Optional[str] = None
-    authorization: Optional[str] = None
-    endpoint: Optional[str] = None
+    proxymap: Any = None
     if proxies is None:
-        # Validated now, decided per request: proxy.plan(url=...) for each hop,
-        # the decision a curl front end makes too.
-        _proxy.proxy_type(env=env) if _proxy.configured_proxy_url(env=env) else None
+        # Validated now, decided per request by proxy.proxy_map(env=env).
+        _proxy.configured_proxy(env=env)
     else:
-        # Caller-supplied proxies are requests' business (userinfo included);
-        # the configured credential still applies if one of them IS the configured proxy.
+        # Caller-supplied proxies are requests' business (userinfo included):
+        # a map with no opinion leaves every request to them.
         session.proxies = proxies
-        configured = _proxy.resolve(env=env)
-        if configured:
-            proxy_url, authorization = configured[0], _proxy.configured_authorization(env=env)
-            proxy_url = proxy_url if proxy_url in proxies.values() else None
-    adapter = _proxy_adapter_class(HTTPAdapter)(
-        proxy=proxy_url,
-        authorization=authorization,
-        endpoint=endpoint,
-        auth_header=_proxy.auth_header(env=env),
+        proxymap = {}
+    adapter = _proxy_adapter_class()(
+        proxymap,
         env=env,
         ssl_context=ssl_context,
         proxy_ssl_context=proxy_ssl_context,
-        dynamic=proxies is None,
         max_retries=retry_strategy,
     )
     session.mount("http://", adapter)

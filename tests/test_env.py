@@ -8,16 +8,23 @@ from pathlib import Path
 
 import pytest
 
+import proxylib
+
 from syshttp import HTTPEnv, hooks, jar, proxy
 
 SRC = Path(__file__).resolve().parents[1] / "src"
+
+
+def _entry(env=None, url="https://api.example.com/"):
+    (entry,) = proxylib.lookup(proxy.proxy_map(env=env), url)
+    return entry
 
 
 def test_default_prefix_is_syshttp(monkeypatch):
     env = HTTPEnv()
     assert env.prefix == "SYSHTTP" and env.name("PROXY") == "SYSHTTP_PROXY"
     monkeypatch.setenv("SYSHTTP_PROXY", "http://mine:1")
-    assert proxy.proxy_url() == "http://mine:1"
+    assert _entry().url == "http://mine:1"
 
 
 def test_syshttp_prefix_renames_every_setting(monkeypatch):
@@ -25,7 +32,8 @@ def test_syshttp_prefix_renames_every_setting(monkeypatch):
     monkeypatch.setenv("SYSHTTP_PROXY", "http://ignored:1")
     monkeypatch.setenv("MYTOOL_PROXY", "http://mytool:1")
     monkeypatch.setenv("MYTOOL_PROXY_AUTH", "Bearer t")
-    assert proxy.resolve() == ("http://mytool:1", "Bearer t")
+    entry = _entry()
+    assert (entry.url, entry.headers) == ("http://mytool:1", {"Proxy-Authorization": "Bearer t"})
     # Read at each lookup, not at import or construction.
     env = HTTPEnv()
     monkeypatch.setenv("SYSHTTP_PREFIX", "OTHER")
@@ -41,7 +49,7 @@ def test_the_argument_wins_over_syshttp_prefix(monkeypatch):
     monkeypatch.setenv("SYSHTTP_PREFIX", "MYTOOL")
     monkeypatch.setenv("ARG_PROXY", "http://arg:1")
     monkeypatch.setenv("MYTOOL_PROXY", "http://mytool:1")
-    assert proxy.proxy_url(env=HTTPEnv("ARG")) == "http://arg:1"
+    assert _entry(HTTPEnv("ARG")).url == "http://arg:1"
 
 
 def test_prefixes_are_upper_case():
@@ -67,7 +75,8 @@ def test_empty_prefix_reads_conventional_variables_only(monkeypatch):
     monkeypatch.setenv("HTTP_PROXY_AUTH", "Basic m")
     env = HTTPEnv("")
     assert env.name("PROXY") is None and env.get("PROXY") is None
-    assert proxy.resolve(env=env) == ("http://machine:1", "Basic m")
+    entry = _entry(env)
+    assert (entry.url, entry.headers) == ("http://machine:1", {"Proxy-Authorization": "Basic m"})
     assert proxy.proxy_type(env=env) == ("connect", None)
     assert hooks.hooks_from_env(env=env) == []
     assert hooks.wrapper_environment(hooks.Hook("X", None, "c", None), "u", "e", env=env) == {}
@@ -76,14 +85,14 @@ def test_empty_prefix_reads_conventional_variables_only(monkeypatch):
 def test_two_instances_are_isolated():
     a = HTTPEnv("A", environ={"A_PROXY": "http://a:1", "B_PROXY": "http://b:1"})
     b = HTTPEnv("B", environ={"A_PROXY": "http://a:1", "B_PROXY": "http://b:1"})
-    assert proxy.proxy_url(env=a) == "http://a:1"
-    assert proxy.proxy_url(env=b) == "http://b:1"
+    assert _entry(a).url == "http://a:1"
+    assert _entry(b).url == "http://b:1"
 
 
 def test_a_message_names_the_prefixed_variable():
     env = HTTPEnv("MYTOOL", environ={"MYTOOL_PROXY": "http://p:1", "MYTOOL_PROXY_TYPE": "socks5"})
     with pytest.raises(ValueError, match="MYTOOL_PROXY_TYPE"):
-        proxy.plan(env=env)
+        _entry(env)
 
 
 def test_jar_root(monkeypatch, tmp_path):
@@ -113,8 +122,8 @@ def test_session_reads_through_its_env(monkeypatch):
     monkeypatch.setenv("SYSHTTP_PROXY", "http://ignored:1")
     env = HTTPEnv("MYTOOL", environ={"MYTOOL_PROXY": "http://mytool:3128", "MYTOOL_PROXY_AUTH": "Bearer t"})
     adapter = new_session(env=env).get_adapter("https://api.example.com/")
-    assert adapter.route("https://api.example.com/").proxy == "http://mytool:3128"
-    assert adapter.proxy_headers("http://mytool:3128") == {"Proxy-Authorization": "Bearer t"}
+    (entry,) = adapter.route("https://api.example.com/")
+    assert (entry.url, entry.headers) == ("http://mytool:3128", {"Proxy-Authorization": "Bearer t"})
 
 
 def test_importing_reads_no_variable():

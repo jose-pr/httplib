@@ -1,66 +1,77 @@
-"""syshttp.proxy: SYSHTTP_PROXY wins, then HTTPS/HTTP/ALL_PROXY (either case).
+"""syshttp.proxy.proxy_map: SYSHTTP_PROXY wins, then the *_PROXY variables by
+the request's scheme (lowercase first), then the system (stubbed off here),
+then DIRECT. No network."""
 
-No network. Run: `PYTHONPATH=src python -m pytest overlays/net/tests/`.
-"""
+import proxylib
+import pytest
 
-import importlib
-
-from syshttp import proxy as _proxy_module  # noqa: E402  (via conftest lib path)
-
-# All proxy env vars proxy_url() consults, so a test can clear them wholesale.
-_ALL_VARS = [
-    "SYSHTTP_PROXY",
-    "HTTPS_PROXY",
-    "https_proxy",
-    "HTTP_PROXY",
-    "http_proxy",
-    "ALL_PROXY",
-    "all_proxy",
-]
+from syshttp import HTTPEnv
+from syshttp import proxy as agent_proxy
 
 
-def _clear(monkeypatch):
-    for v in _ALL_VARS:
-        monkeypatch.delenv(v, raising=False)
+def _urls(url, environ, **kwargs):
+    """The answer's entries as proxy URLs (credentials included), None for DIRECT."""
+    answer = proxylib.lookup(agent_proxy.proxy_map(env=HTTPEnv(environ=environ), **kwargs), url)
+    return [None if entry is None else entry.uri() for entry in answer]
 
 
-def test_syshttp_proxy_wins_over_everything(monkeypatch):
-    _clear(monkeypatch)
-    monkeypatch.setenv("SYSHTTP_PROXY", "http://agent:1/")
-    monkeypatch.setenv("HTTPS_PROXY", "http://https:2/")
-    monkeypatch.setenv("HTTP_PROXY", "http://http:3/")
-    monkeypatch.setenv("ALL_PROXY", "http://all:4/")
-    importlib.reload(_proxy_module)
-    assert _proxy_module.proxy_url() == "http://agent:1/"
+def test_syshttp_proxy_wins_over_everything():
+    environ = {
+        "SYSHTTP_PROXY": "http://agent:1/",
+        "HTTPS_PROXY": "http://https:2/",
+        "HTTP_PROXY": "http://http:3/",
+        "ALL_PROXY": "http://all:4/",
+    }
+    assert _urls("https://example.com/", environ) == ["http://agent:1"]
+    assert _urls("http://example.com/", environ) == ["http://agent:1"]
 
 
-def test_fallback_order_https_before_http_before_all(monkeypatch):
-    _clear(monkeypatch)
-    monkeypatch.setenv("HTTP_PROXY", "http://http:3/")
-    monkeypatch.setenv("ALL_PROXY", "http://all:4/")
-    monkeypatch.setenv("HTTPS_PROXY", "http://https:2/")
-    assert _proxy_module.proxy_url() == "http://https:2/"
-
-    monkeypatch.delenv("HTTPS_PROXY")
-    assert _proxy_module.proxy_url() == "http://http:3/"
-
-    monkeypatch.delenv("HTTP_PROXY")
-    assert _proxy_module.proxy_url() == "http://all:4/"
+def test_each_scheme_takes_its_own_variable():
+    environ = {"HTTPS_PROXY": "http://tls-proxy:1", "HTTP_PROXY": "http://plain-proxy:2"}
+    assert _urls("https://example.com/", environ) == ["http://tls-proxy:1"]
+    assert _urls("http://example.com/", environ) == ["http://plain-proxy:2"]
 
 
-def test_lowercase_fallback_recognized(monkeypatch):
-    _clear(monkeypatch)
-    monkeypatch.setenv("https_proxy", "http://lower:9/")
-    assert _proxy_module.proxy_url() == "http://lower:9/"
+def test_all_proxy_is_the_fallback_and_a_scheme_without_one_is_direct():
+    assert _urls("ftp://example.com/", {"ALL_PROXY": "http://all:4"}) == ["http://all:4"]
+    assert _urls("http://example.com/", {"HTTPS_PROXY": "http://tls:1"}) == [None]
 
 
-def test_none_when_unset(monkeypatch):
-    _clear(monkeypatch)
-    assert _proxy_module.proxy_url() is None
-    assert _proxy_module.proxies_from_env() is None
+def test_lowercase_wins_over_uppercase():
+    environ = {"https_proxy": "http://lower:9", "HTTPS_PROXY": "http://upper:8"}
+    assert _urls("https://example.com/", environ) == ["http://lower:9"]
 
 
-def test_proxies_dict_shape(monkeypatch):
-    _clear(monkeypatch)
-    monkeypatch.setenv("SYSHTTP_PROXY", "http://p:1/")
-    assert _proxy_module.proxies_from_env() == {"http": "http://p:1/", "https": "http://p:1/"}
+def test_direct_when_nothing_is_set():
+    assert _urls("https://example.com/", {}) == [None]
+
+
+def test_httpoxy_an_uppercase_http_proxy_under_cgi_is_ignored():
+    environ = {"REQUEST_METHOD": "GET", "HTTP_PROXY": "http://attacker:8080", "SYSHTTP_PROXY_AUTH": "Bearer x"}
+    assert _urls("http://example.com/", environ) == [None]
+
+
+def test_a_pac_result_in_a_variable_is_a_list_to_try():
+    environ = {"HTTPS_PROXY": "PROXY a.example:3128; PROXY b.example:3128; DIRECT"}
+    assert _urls("https://example.com/", environ) == ["http://a.example:3128", "http://b.example:3128", None]
+
+
+def test_the_system_answers_when_no_variable_is_set(monkeypatch):
+    monkeypatch.setattr(agent_proxy, "system_map", lambda: proxylib.SimpleProxyMap("PROXY sys.example:8080"))
+    assert _urls("https://example.com/", {}) == ["http://sys.example:8080"]
+    assert _urls("https://example.com/", {"SYSHTTP_SYSTEM_PROXY": "0"}) == [None]
+    assert _urls("https://example.com/", {"HTTP_PROXY": "http://plain:2"}) == [None], "a variable set: env alone"
+
+
+def test_a_system_that_fails_is_direct(monkeypatch):
+    class Broken:
+        def __getitem__(self, url):
+            raise RuntimeError("PAC died")
+
+    monkeypatch.setattr(agent_proxy, "system_map", lambda: agent_proxy._Quiet(Broken()))
+    assert _urls("https://example.com/", {}) == [None]
+
+
+def test_a_bad_system_proxy_setting_names_the_variable():
+    with pytest.raises(ValueError, match="SYSHTTP_SYSTEM_PROXY"):
+        _urls("https://example.com/", {"SYSHTTP_SYSTEM_PROXY": "maybe"})

@@ -4,16 +4,12 @@
 Public surface (the package's AGENTS.md documents each name):
   env.HTTPEnv                          — where settings come from: <P>_<NAME>, the
                                          prefix from SYSHTTP_PREFIX (default SYSHTTP)
-  proxy.proxy_url / proxies_from_env   — the proxy from <P>_PROXY, else HTTPS_PROXY & co.,
-                                         else the system's configuration for the URL
-  proxy.resolve                        — (clean proxy URL, Proxy-Authorization value):
-                                         <P>_PROXY_AUTH / HTTP_PROXY_AUTH verbatim,
-                                         else Basic from the URL's userinfo
-  proxy.proxy_type / prefix_url        — <P>_PROXY_TYPE (connect | prefix[:/endpoint]);
-                                         the <proxy><endpoint><url> a prefix gateway gets
-  proxy.redact / should_bypass         — a printable URL, the NO_PROXY decision
-  proxy.plan / ProxyPlan               — the whole proxy decision (-x / -U / --noproxy
-                                         overrides included) the session and curl share
+  proxy.proxy_map                      — the routing as a proxylib ProxyMap: <P>_PROXY with
+                                         its credential, else the *_PROXY variables or the
+                                         system's configuration, NO_PROXY first (-x / -U /
+                                         --noproxy overrides included)
+  proxy.configured_proxy / proxy_type  — <P>_PROXY as a proxylib Proxy; <P>_PROXY_TYPE
+                                         (connect | prefix[:/endpoint])
   cookies.load_netscape / save_netscape / cookie_applies / set_cookie_specs
                                        — Netscape jars and curl's cookie rules
   tls.os_ssl_context / new_os_context  — the system's TLS client (sslcontext) as an SSLContext
@@ -23,8 +19,8 @@ Public surface (the package's AGENTS.md documents each name):
                                          an syshttp callable) matched on the caller's URL
   session.new_session                  — configured requests.Session
   fetch.request_text / request_json / request_with_reauth / *_auto helpers
-  autopatch                            — SYSHTTP_IMPORTPATCH: requests, urllib, httpx, aiohttp
-                                         patched on import to route and verify the same way
+  autopatch                            — SYSHTTP_IMPORTPATCH: requests, urllib, httpx, aiohttp,
+                                         pip patched on import to route and verify the same way
 
 ``env``, ``proxy``, ``jar``, ``cookies``, ``tls``, ``retry`` and ``hooks``
 need only syshttp's dependencies (proxylib, sslcontext);
@@ -35,29 +31,14 @@ need only syshttp's dependencies (proxylib, sslcontext);
 from importlib.metadata import PackageNotFoundError, version
 
 from .env import HTTPEnv
-from .proxy import (
-    NoReachableProxyError,
-    prefix_url,
-    proxies_from_env,
-    proxy_authorization,
-    proxy_type,
-    proxy_url,
-    redact,
-    resolve,
-    should_bypass,
-)
+from .proxy import NoReachableProxyError, configured_proxy, proxy_map, proxy_type
 
 __all__ = [
     "HTTPEnv",
     "NoReachableProxyError",
-    "prefix_url",
-    "proxies_from_env",
-    "proxy_authorization",
+    "configured_proxy",
+    "proxy_map",
     "proxy_type",
-    "proxy_url",
-    "redact",
-    "resolve",
-    "should_bypass",
 ]
 
 try:
