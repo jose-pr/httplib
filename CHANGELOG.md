@@ -50,7 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Routing is proxylib 2's (`proxylib>=2.0.1,<3`). `proxy.proxy_map(proxy,
+- Routing is proxylib 2's (`proxylib>=2.0.2,<3`; 2.0.1 breaks pip's cached
+  requests). `proxy.proxy_map(proxy,
   noproxy, proxy_user, *, env)` is the settings as one proxylib proxy map,
   read at each lookup; `proxy.configured_proxy()` is `<PREFIX>_PROXY` as a
   proxylib `Proxy`; `proxy.system_map()` is the system's configuration
@@ -68,9 +69,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `proxies=` given to `new_session` are requests' own, with no syshttp
   credential added.
 - `syshttp.autopatch` routes through `proxylib.patch()` and patches TLS only;
-  requests' TLS is a pool hook on every `HTTPAdapter`. A caller's
-  `scheme://hostname` proxy entry wins over the system, a bare `"http"` key
-  does not, and `trust_env = False` no longer opts out. aiohttp is not offered
+  requests' TLS is a pool hook on every `HTTPAdapter`. A caller's own
+  proxies and `trust_env = False` still win over syshttp (proxylib 2.0.2's
+  rule). aiohttp is not offered
   URL-prefix gateways. New target `pip` (`pip._vendor.requests`, proxylib
   2.0.1's `pip` target): pip's adapters route through the map unless pip is
   given `--proxy` or `--no-proxy-env`; pip keeps its own TLS context.

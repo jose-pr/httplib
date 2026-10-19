@@ -175,17 +175,20 @@ def test_requests_goes_through_the_configured_proxy(patched, configured, target)
     assert resp.text == "via-proxy" and _Proxy.seen[-1] == (target + "/x", BEARER)
 
 
-def test_requests_keeps_the_callers_proxy_for_its_host(patched, proxy, target, monkeypatch, dead_port):
-    """proxylib's rule: a caller's entry at ``scheme://hostname`` wins; a bare
-    ``"http"`` key -- the one requests also fills from the environment --
-    does not."""
+@pytest.mark.parametrize("key", ["http", "all", "http://127.0.0.1"])
+def test_requests_keeps_the_callers_proxy(key, patched, proxy, target, monkeypatch, dead_port):
     _Proxy.expected = None
     monkeypatch.setenv("SYSHTTP_PROXY", "http://127.0.0.1:%d" % dead_port)
     monkeypatch.setenv("SYSHTTP_PROXY_AUTH", BEARER)
-    resp = requests.get(target + "/x", proxies={"http://127.0.0.1": "http://" + proxy}, timeout=5)
+    resp = requests.get(target + "/x", proxies={key: "http://" + proxy}, timeout=5)
     assert resp.text == "via-proxy" and _Proxy.seen[-1] == (target + "/x", None), "no syshttp credential"
-    with pytest.raises(requests.exceptions.ProxyError):
-        requests.get(target + "/x", proxies={"http": "http://" + proxy}, timeout=5)
+
+
+def test_requests_without_trust_env_is_left_alone(patched, target, monkeypatch, dead_port):
+    monkeypatch.setenv("SYSHTTP_PROXY", "http://127.0.0.1:%d" % dead_port)
+    session = requests.Session()
+    session.trust_env = False
+    assert session.get(target + "/x", timeout=5).text == "hello"
 
 
 def test_requests_gets_the_system_context(patched):
@@ -366,13 +369,16 @@ def test_pip_is_a_target_and_keeps_its_own_tls():
     assert autopatch.enabled(env=HTTPEnv(environ={"SYSHTTP_IMPORTPATCH": "pip._vendor.requests"})) == {"pip"}
 
 
-def test_pip_goes_through_the_configured_proxy(configured, target):
+def test_pip_goes_through_the_configured_proxy(configured, target, tmp_path):
     """pip's own session class, as pip builds it: it mounts its adapters after
-    Session.__init__, and still routes."""
+    Session.__init__, and its HTTP cache's adapter passes send() arguments by
+    position; it still routes."""
     session_module = pytest.importorskip("pip._internal.network.session")
     autopatch.patch(["pip"])
     try:
-        with session_module.PipSession() as session:
+        # A trusted host gets pip's caching adapter over http too.
+        host = target.split("//", 1)[1]
+        with session_module.PipSession(cache=str(tmp_path / "cache"), trusted_hosts=[host]) as session:
             resp = session.get(target + "/x", timeout=5)
         assert resp.text == "via-proxy" and _Proxy.seen[-1] == (target + "/x", BEARER)
     finally:

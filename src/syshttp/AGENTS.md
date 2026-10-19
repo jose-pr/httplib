@@ -13,7 +13,7 @@ Import names from their modules: `syshttp.env`, `syshttp.proxy`,
 root re-exports `HTTPEnv`, `NoReachableProxyError`, `proxy_map`,
 `configured_proxy` and `proxy_type`.
 
-`pip install syshttp` brings proxylib 2.0.1+ (proxy routing and the system's proxy configuration),
+`pip install syshttp` brings proxylib 2.0.2+ (proxy routing and the system's proxy configuration),
 sslcontext (the system's TLS client; truststore on Python 3.10+) and
 importpatch (import-time patching of other HTTP clients, off unless
 `SYSHTTP_IMPORTPATCH` asks for it). The extra `pac`
@@ -344,9 +344,9 @@ def patched() -> tuple[str, ...]
   TLS is syshttp's: with verification on and no TLS argument of the
   caller's, the system's context.
   - **requests**: new `Session`s mount proxylib's `ProxyMapAdapter`:
-    entries tried in order, a caller's `proxies` entry at the
-    `scheme://hostname` key wins (a bare `"http"` key, or one requests adds
-    from the environment, does not; `trust_env = False` is not an opt-out).
+    entries tried in order. A proxy the caller gives (`proxies=` on the
+    call, or `session.proxies`) is used as given, without syshttp's
+    credential, and a session with `trust_env = False` is left to requests.
     Every `HTTPAdapter` with `verify=True` and no context of its own pool
     manager verifies with `tls.os_ssl_context()` (requests 2.32.2+).
   - **urllib**: proxylib's global opener (installed when the program has
