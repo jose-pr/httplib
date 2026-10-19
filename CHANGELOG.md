@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (`url=` / `target=`). `proxy.configured_proxy_url()` gives the
   environment's answer alone. The `pac` extra adds a JavaScript engine for PAC
   scripts proxylib evaluates itself (Linux without libproxy).
+- `syshttp.autopatch`: `SYSHTTP_IMPORTPATCH=1` (or names: `requests`,
+  `urllib`, `httpx`, `aiohttp`) patches those libraries as they are imported,
+  in any program of the environment, so requests without a proxy or TLS
+  setting of the caller's route by syshttp and verify with the system's
+  context. Through importpatch, a new dependency, and its entry points;
+  `patch()` / `unpatch()` do it from code.
 - The system's answer is a list (`PROXY a; PROXY b; DIRECT`): the first proxy
   that accepts a connection is used (proxylib's `first_working_proxy`), and a
   DIRECT reached first is direct. No reachable proxy and no DIRECT raises

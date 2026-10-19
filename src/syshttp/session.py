@@ -76,7 +76,10 @@ def _proxy_adapter_class(HTTPAdapter):
     ``session.send``, and every redirect hop -- passes through, so this is the
     layer requests designed for it; a ``session.request`` wrapper would miss
     the last two."""
+    import weakref
+
     from requests.cookies import RequestsCookieJar, extract_cookies_to_jar
+    from requests.utils import get_environ_proxies, select_proxy
 
     class ProxyAdapter(HTTPAdapter):
         """``proxy`` (userinfo-free URL) + ``authorization`` (the
@@ -98,6 +101,11 @@ def _proxy_adapter_class(HTTPAdapter):
         gateway URL and the credential into the next hop -- which may be a
         ``NO_PROXY`` origin. The response reports the caller's URL, so
         redirects, cookies and history speak the URL the caller asked for.
+
+        ``caller_proxies`` (a session patched by :mod:`.autopatch`): a proxy
+        the caller chose -- one the environment would not have picked -- or
+        a ``session`` whose ``trust_env`` is off is sent as requests would,
+        TLS aside.
         """
 
         def __init__(
@@ -111,6 +119,8 @@ def _proxy_adapter_class(HTTPAdapter):
             ssl_context: "Optional[ssl.SSLContext]" = None,
             proxy_ssl_context: "Optional[ssl.SSLContext]" = None,
             dynamic: bool = False,
+            caller_proxies: bool = False,
+            session: Any = None,
             **kwargs: Any,
         ) -> None:
             # Set before HTTPAdapter.__init__, which builds the pool manager.
@@ -119,6 +129,8 @@ def _proxy_adapter_class(HTTPAdapter):
             super().__init__(**kwargs)
             self.env = env
             self.dynamic = dynamic
+            self.caller_proxies = caller_proxies
+            self._session = weakref.ref(session) if session is not None else None
             self.proxy = proxy
             self.authorization = authorization
             self.endpoint = endpoint
@@ -186,6 +198,16 @@ def _proxy_adapter_class(HTTPAdapter):
                 headers[credential[0]] = credential[1]
             return headers
 
+        def _callers_choice(self, url: str, proxies: Optional[Dict[str, str]]) -> bool:
+            """Whether the caller, not syshttp, routes ``url``: its session
+            ignores the environment, or the proxy requests selected is not the
+            one the environment names (requests merges both into ``proxies``)."""
+            owner = self._session() if self._session is not None else None
+            if owner is not None and not owner.trust_env:
+                return True
+            given = select_proxy(url, proxies or {})
+            return bool(given) and given != select_proxy(url, get_environ_proxies(url))
+
         def route(self, url: str) -> "Optional[_proxy.ProxyPlan]":
             """The plan for one hop: decided again for every request (the
             environment as it is now, and the system's answer for this URL)
@@ -198,6 +220,8 @@ def _proxy_adapter_class(HTTPAdapter):
 
         def send(self, request: "requests.PreparedRequest", **kwargs: Any) -> "requests.Response":
             original = request.url or ""
+            if self.caller_proxies and self._callers_choice(original, kwargs.get("proxies")):
+                return super().send(request, **kwargs)
             try:
                 route = self.route(original)
             except _proxy.NoReachableProxyError as exc:
