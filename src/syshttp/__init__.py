@@ -32,10 +32,15 @@ from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
 from .env import HTTPEnv
+from .exceptions import ConfigurationError, HookError, ResponseError, SysHTTPError
 
 __all__ = [
+    "ConfigurationError",
     "HTTPEnv",
+    "HookError",
     "NoReachableProxyError",
+    "ResponseError",
+    "SysHTTPError",
     "configured_proxy",
     "proxy_map",
     "proxy_type",

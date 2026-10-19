@@ -6,6 +6,9 @@ if TYPE_CHECKING:  # requests is optional at runtime: types only
     import requests
 
 
+__all__ = ("AuthProvider",)
+
+
 class AuthProvider(Protocol):
     """Something that makes ``session`` authenticated for ``url`` (a login,
     a token refresh) -- called before a request and again after a 401/403

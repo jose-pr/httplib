@@ -26,6 +26,8 @@ import os
 import re
 from typing import Iterator, Mapping, Optional, Tuple
 
+from .exceptions import ConfigurationError
+
 __all__ = ["DEFAULT_PREFIX", "PREFIX_VAR", "HTTPEnv"]
 
 #: The variable naming the prefix of every other setting.
@@ -37,15 +39,17 @@ _PREFIX_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)*\Z")
 
 
 def _check_prefix(prefix: str, source: str) -> str:
+    # The argument is a caller's mistake (ValueError); the variable is a setting.
+    error = ConfigurationError if source == PREFIX_VAR else ValueError
     if prefix and not _PREFIX_RE.match(prefix):
-        raise ValueError(
+        raise error(
             "%s must be letters, digits and single inner underscores, starting with a letter, not %r" % (source, prefix)
         )
     # Upper case, as variable names are: Windows upper-cases os.environ's keys,
     # so a lower-case prefix would match there and nowhere else.
     prefix = prefix.upper()
     if prefix == "HTTP" or prefix.startswith("HTTP_"):
-        raise ValueError(
+        raise error(
             "%s must not be HTTP or start with HTTP_, not %r: CGI exports request headers as HTTP_* variables, "
             "so a client would choose the settings and the hooks" % (source, prefix)
         )

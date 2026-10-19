@@ -56,9 +56,30 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 from urllib.parse import urlsplit
 
 from .env import HTTPEnv
+from .exceptions import ConfigurationError, HookError
 
 if TYPE_CHECKING:  # requests is optional at runtime: types only
     import requests
+
+__all__ = (
+    "CURL_SUFFIX",
+    "HOOKS",
+    "HOOK_CURL",
+    "HOOK_KEY",
+    "HOOK_SKIP",
+    "HOOK_URL",
+    "Hook",
+    "PY_SUFFIX",
+    "PyHook",
+    "call_py_hooks",
+    "curl_command",
+    "hooks_from_env",
+    "load_callable",
+    "matching",
+    "skipped",
+    "split_command",
+    "wrapper_environment",
+)
 
 #: What a ``_PY`` hook is: ``(session, method, url, kwargs) -> None | response``.
 PyHook = Callable[["requests.Session", str, str, Dict[str, Any]], "Optional[requests.Response]"]
@@ -126,7 +147,7 @@ def hooks_from_env(*, env: Optional[HTTPEnv] = None) -> List[Hook]:
         try:
             pattern = re.compile(value)
         except re.error as exc:
-            raise ValueError("%s is not a valid regular expression: %s" % (variable, exc))
+            raise ConfigurationError("%s is not a valid regular expression: %s" % (variable, exc))
         curl = found.get(key + CURL_SUFFIX, (None, None))[1]
         py = found.get(key + PY_SUFFIX, (None, None))[1]
         if curl or py:
@@ -169,7 +190,7 @@ def _file_module(path: Path) -> Any:
             name = "syshttp_hook_%s_%s" % (re.sub(r"\W", "_", path.stem), digest)
             module_spec = importlib.util.spec_from_file_location(name, resolved)
             if module_spec is None or module_spec.loader is None:
-                raise ValueError("%s is not loadable as a Python module" % resolved)
+                raise ConfigurationError("%s is not loadable as a Python module" % resolved)
             module = importlib.util.module_from_spec(module_spec)
             sys.modules[name] = module
             try:
@@ -186,7 +207,7 @@ def load_callable(spec: str) -> "PyHook":
     A file is loaded once per process, by its resolved path."""
     target, sep, attr = spec.rpartition(":")
     if not sep or not target or not attr:
-        raise ValueError("a hook callable is written <module or file.py>:<callable>, not %r" % spec)
+        raise ConfigurationError("a hook callable is written <module or file.py>:<callable>, not %r" % spec)
     if target.endswith(".py") and Path(target).is_file():
         module = _file_module(Path(target))
     else:
@@ -195,7 +216,7 @@ def load_callable(spec: str) -> "PyHook":
     for part in attr.split("."):
         obj = getattr(obj, part)
     if not callable(obj):
-        raise ValueError("%s is not callable" % spec)
+        raise ConfigurationError("%s is not callable" % spec)
     return obj
 
 
@@ -234,7 +255,7 @@ def call_py_hooks(
             # The variable, so the failure is traceable to its declaration;
             # the URL without its userinfo, query and fragment, which carry
             # secrets. The hook's own exception is chained as it is.
-            raise RuntimeError(
+            raise HookError(
                 "%s%s (%s) failed for %s %s: %s" % (hook.variable, PY_SUFFIX, hook.py, method, _bare_url(url), exc)
             ) from exc
         if result is not None:
@@ -260,10 +281,10 @@ def curl_command(hook: Hook, python: Optional[str] = None) -> List[str]:
     file runs under ``python`` (default: this interpreter)."""
     value = (hook.curl or "").strip()
     if not value:
-        raise ValueError("%s%s is empty" % (hook.variable, CURL_SUFFIX))
+        raise ConfigurationError("%s%s is empty" % (hook.variable, CURL_SUFFIX))
     argv = [value] if Path(value).is_file() else split_command(value)
     if not argv:
-        raise ValueError("%s%s holds no command" % (hook.variable, CURL_SUFFIX))
+        raise ConfigurationError("%s%s holds no command" % (hook.variable, CURL_SUFFIX))
     if argv[0].lower().endswith(".py") and Path(argv[0]).is_file():
         argv = [python or sys.executable, *argv]
     return argv

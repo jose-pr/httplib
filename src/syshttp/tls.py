@@ -20,6 +20,12 @@ from typing import Optional
 
 import sslcontext
 
+__all__ = (
+    "OS_CONTEXT_MAX_AGE",
+    "new_os_context",
+    "os_ssl_context",
+)
+
 #: How long the shared context is reused (seconds) before it is rebuilt, so a
 #: certificate added to the system store is picked up.
 OS_CONTEXT_MAX_AGE = 60

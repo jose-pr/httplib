@@ -12,10 +12,19 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Tuple, Union
 
 from .auth import AuthProvider
+from .exceptions import ResponseError
 from .session import new_session
 
 if TYPE_CHECKING:  # requests is optional at runtime: types only
     import requests
+
+__all__ = (
+    "request_json",
+    "request_json_auto",
+    "request_text",
+    "request_text_auto",
+    "request_with_reauth",
+)
 
 VerifyT = Union[bool, str, Path]
 #: What requests accepts: seconds, or a ``(connect, read)`` pair.
@@ -79,7 +88,7 @@ def request_json(
     try:
         return status, json.loads(text)
     except json.JSONDecodeError as e:
-        raise ValueError("response was not valid JSON (HTTP %d)" % status) from e
+        raise ResponseError("response was not valid JSON (HTTP %d)" % status) from e
 
 
 def request_with_reauth(

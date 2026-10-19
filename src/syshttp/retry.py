@@ -8,6 +8,11 @@ from typing import Iterable, Optional, Tuple
 
 from ._parse import ascii_int, http_date
 
+__all__ = (
+    "TRANSIENT_STATUSES",
+    "retry_after",
+)
+
 #: The HTTP statuses curl calls transient: request timeout, too many
 #: requests, and the 5xx a retry can fix.
 TRANSIENT_STATUSES: Tuple[int, ...] = (408, 429, 500, 502, 503, 504)

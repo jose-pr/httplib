@@ -20,6 +20,19 @@ from ._fileio import read_text, write_private
 from .cookies import CookieSpec, load_netscape, save_netscape
 from .env import HTTPEnv
 
+__all__ = (
+    "CookieJar",
+    "FileCookieJar",
+    "FileTokenJar",
+    "HOME",
+    "MemoryCookieJar",
+    "MemoryTokenJar",
+    "TokenJar",
+    "default_root",
+    "safe_name",
+    "store_root",
+)
+
 #: The setting naming the jar root, as ``<P>_HOME``.
 HOME = "HOME"
 

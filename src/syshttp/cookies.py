@@ -20,6 +20,22 @@ if TYPE_CHECKING:  # requests is optional at runtime: types only
     import requests
 
 
+__all__ = (
+    "CookieLike",
+    "CookieSpec",
+    "HTTP_ONLY_PREFIX",
+    "MAX_COOKIE_AGE",
+    "apply_to_session",
+    "cookie_applies",
+    "domain_covers",
+    "host_only_policy",
+    "load_netscape",
+    "merge_set_cookie_headers",
+    "save_netscape",
+    "set_cookie_specs",
+)
+
+
 class CookieLike(Protocol):
     """What :func:`save_netscape` reads off a cookie: ``http.cookiejar.Cookie``
     (a requests session's) or any object with these attributes."""

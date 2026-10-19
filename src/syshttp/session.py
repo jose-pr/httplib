@@ -49,14 +49,16 @@ from . import hooks as _hooks
 from .auth import AuthProvider
 from .cookies import _spec_from_cookie, apply_to_session, domain_covers, host_only_policy, merge_set_cookie_headers
 from .env import HTTPEnv
+from .exceptions import ConfigurationError
 from .jar import CookieJar, FileCookieJar, FileTokenJar, TokenJar
 from .retry import TRANSIENT_STATUSES
 from .tls import OS_CONTEXT_MAX_AGE, new_os_context, os_ssl_context  # noqa: F401  (re-exported: session's own API)
 from . import proxy as _proxy
-from .warnings import disable_insecure_request_warnings
 
 if TYPE_CHECKING:  # requests is optional at runtime: types only
     import requests
+
+__all__ = ("new_session",)
 
 VerifyT = Union[bool, str, Path]
 
@@ -290,7 +292,6 @@ def new_session(
     if ssl_context is not None and verify is not True:
         raise ValueError("verify=%r and ssl_context contradict: the context's verify_mode decides" % (verify,))
     env = HTTPEnv() if env is None else env
-    disable_insecure_request_warnings()
     # First, for its actionable ImportError when requests is absent.
     _, _, Retry = _import_requests()
     session = _session_class()()
@@ -381,7 +382,7 @@ def new_session(
         token = str(token).strip()
         if any(ch in token for ch in "\r\n\0"):
             # Named, not echoed: the value is a secret.
-            raise ValueError("the token for %r contains a carriage return, line feed or NUL character" % key)
+            raise ConfigurationError("the token for %r contains a carriage return, line feed or NUL character" % key)
         return token if re.match(r"^[A-Za-z][\w-]*\s+\S", token) else "Bearer " + token
 
     def _cookie_keys_for(url: str) -> list:

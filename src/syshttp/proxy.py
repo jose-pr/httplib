@@ -41,9 +41,18 @@ import proxylib
 from proxylib import NoReachableProxyError, Proxy
 
 from .env import HTTPEnv
+from .exceptions import ConfigurationError
 
 __all__ = (
+    "DEFAULT_AUTH_HEADER",
+    "MACHINE_AUTH_VAR",
     "NoReachableProxyError",
+    "PROXY",
+    "PROXY_AUTH",
+    "PROXY_AUTH_HEADER",
+    "PROXY_TYPE",
+    "SYSTEM_PROXY",
+    "SYSTEM_PROXY_MAX_AGE",
     "auth_header",
     "configured_proxy",
     "proxy_map",
@@ -100,7 +109,7 @@ def system_proxy_enabled(*, env: Optional[HTTPEnv] = None) -> bool:
         return True
     if raw.lower() in _FALSE:
         return False
-    raise ValueError("%s must be one of %s, not %r" % (_var(env, SYSTEM_PROXY), "/".join(_TRUE + _FALSE), raw))
+    raise ConfigurationError("%s must be one of %s, not %r" % (_var(env, SYSTEM_PROXY), "/".join(_TRUE + _FALSE), raw))
 
 
 def auth_header(*, env: Optional[HTTPEnv] = None) -> str:
@@ -112,7 +121,7 @@ def auth_header(*, env: Optional[HTTPEnv] = None) -> str:
     if not name:
         return DEFAULT_AUTH_HEADER
     if ":" in name or any(ch.isspace() for ch in name):
-        raise ValueError("%s must be a header name, not %r" % (_var(env, PROXY_AUTH_HEADER), name))
+        raise ConfigurationError("%s must be a header name, not %r" % (_var(env, PROXY_AUTH_HEADER), name))
     return name
 
 
@@ -129,7 +138,7 @@ def proxy_type(*, env: Optional[HTTPEnv] = None) -> Tuple[str, Optional[str]]:
     if kind == "connect":
         return "connect", None
     if kind != "prefix":
-        raise ValueError("%s must be 'connect' or 'prefix[:/endpoint]', not %r" % (_var(env, PROXY_TYPE), raw))
+        raise ConfigurationError("%s must be 'connect' or 'prefix[:/endpoint]', not %r" % (_var(env, PROXY_TYPE), raw))
     endpoint = endpoint.strip() or "/"
     if not endpoint.startswith("/"):
         endpoint = "/" + endpoint
@@ -141,7 +150,7 @@ def _checked(variable: str, value: str) -> str:
     LF or NUL, which would end the header. The message names the variable,
     never the value (a secret)."""
     if any(ch in value for ch in "\r\n\0"):
-        raise ValueError("%s must not contain a carriage return, line feed or NUL character" % variable)
+        raise ConfigurationError("%s must not contain a carriage return, line feed or NUL character" % variable)
     return value
 
 
@@ -171,7 +180,7 @@ def configured_proxy(*, env: Optional[HTTPEnv] = None) -> Optional[Proxy]:
     kind, endpoint = proxy_type(env=env)
     if kind == "prefix":
         if found.scheme not in ("http", "https"):
-            raise ValueError("%s=prefix needs an http or https %s" % (_var(env, PROXY_TYPE), _var(env, PROXY)))
+            raise ConfigurationError("%s=prefix needs an http or https %s" % (_var(env, PROXY_TYPE), _var(env, PROXY)))
         found = Proxy("prefix+" + found.scheme, found.host, found.port, found.username, found.password, path=endpoint)
     value = env.get(PROXY_AUTH)
     if not value:
