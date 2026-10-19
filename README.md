@@ -17,21 +17,24 @@ together. Documentation: <https://jose-pr.github.io/syshttp/>.
 
 ## Features
 
+- **Routing is [proxylib](https://pypi.org/project/proxylib/)'s** —
+  `proxy.proxy_map()` turns the settings below into one proxylib proxy map,
+  and proxylib's client integrations send through it.
 - **The system's proxy, by default** — with no proxy variable set, the
   system's configuration decides per URL: WinHTTP on Windows, CFNetwork on
-  macOS, libproxy or the desktop's settings elsewhere, PAC and WPAD included
-  (through [proxylib](https://pypi.org/project/proxylib/)). Of a list
-  (`PROXY a; PROXY b; DIRECT`) the first proxy that answers is used; with no
-  proxy answering and no DIRECT the request fails (`NoReachableProxyError`)
-  rather than going direct.
-- **Proxies with credentials** — a proxy URL from `SYSHTTP_PROXY` or the
-  usual `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`. The `Proxy-Authorization`
-  value is sent verbatim, so any scheme works (`Basic`, `Bearer`,
-  `Negotiate`). `NO_PROXY` is honoured, and every redirect hop is decided
-  again.
+  macOS, libproxy or the desktop's settings elsewhere, PAC and WPAD included.
+  A list (`PROXY a; PROXY b; DIRECT`) is tried in order, the next entry when
+  one does not connect; with no proxy connecting and no DIRECT the request
+  fails rather than going direct.
+- **Proxies with credentials** — a proxy URL from `SYSHTTP_PROXY`, else the
+  usual `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` for the request's scheme.
+  The credential is a header value sent verbatim to that proxy only, so any
+  scheme works (`Basic`, `Bearer`, `Negotiate`). `NO_PROXY` is honoured
+  (CIDR included), and every redirect hop is decided again.
 - **Prefix gateways** — `SYSHTTP_PROXY_TYPE=prefix:/fetch/` sends
-  `GET https://api.example.com/x` to `<proxy>/fetch/https://api.example.com/x`.
-  Responses, redirects and cookies still use the caller's URL.
+  `GET https://api.example.com/x` to `<proxy>/fetch/https://api.example.com/x`
+  (requests, httpx and urllib). Responses, redirects and cookies still use
+  the caller's URL.
 - **One prefix for every setting** — `SYSHTTP_PREFIX=MYTOOL` makes the
   package read `MYTOOL_PROXY`, `MYTOOL_HOME` and so on. An `HTTPEnv(prefix=...)`
   object keeps one configuration apart from another in the same process.
@@ -51,7 +54,7 @@ together. Documentation: <https://jose-pr.github.io/syshttp/>.
 - **A configured `requests.Session`** — retry with backoff, all of the above
   applied in one transport adapter.
 - **Other programs' clients, patched on import** — `SYSHTTP_IMPORTPATCH=1`
-  (or `requests:urllib:httpx:aiohttp`) makes those libraries route and
+  (or `requests:urllib:httpx:aiohttp:pip`) makes those libraries route and
   verify the same way in any program of the environment, through
   [importpatch](https://pypi.org/project/importpatch/); what a caller sets
   itself still wins.
@@ -74,14 +77,14 @@ interpreter start; nothing is patched unless `SYSHTTP_IMPORTPATCH` says so).
 
 ## Quick start
 
-Resolve the proxy and its credential the way every client here does:
+Ask where a request would go, the way every client here does:
 
 ```python
+import proxylib
 from syshttp import proxy
 
-plan = proxy.plan()            # None when no proxy is configured
-if plan and not plan.bypasses("https://api.example.com/"):
-    print(proxy.redact(plan.proxy), plan.auth_header)
+for entry in proxylib.lookup(proxy.proxy_map(), "https://api.example.com/"):
+    print("DIRECT" if entry is None else entry.url)   # tried in this order
 ```
 
 A session with file-backed cookies and tokens (`pip install 'syshttp[session]'`):
@@ -109,14 +112,14 @@ s = new_session(env=env)
 | Module | Purpose |
 | --- | --- |
 | `syshttp.env` | `HTTPEnv`: the prefix and mapping every setting is read from |
-| `syshttp.proxy` | the proxy, its credential, its kind, `NO_PROXY`; `plan()` decides all of it |
+| `syshttp.proxy` | `proxy_map()`: the settings as one proxylib proxy map |
 | `syshttp.session` | `new_session()`: a configured `requests.Session` |
 | `syshttp.fetch` | text and JSON request helpers, retry once after a 401/403 |
 | `syshttp.jar` | file and memory cookie/token jars |
 | `syshttp.cookies` | Netscape cookie files and curl's cookie rules |
 | `syshttp.hooks` | URL hooks declared in the environment |
 | `syshttp.tls` | the OS verifier as an `SSLContext` |
-| `syshttp.autopatch` | requests, urllib, httpx and aiohttp patched on import |
+| `syshttp.autopatch` | requests, urllib, httpx, aiohttp and pip patched on import |
 | `syshttp.retry` | the transient statuses, `Retry-After` |
 
 ## Settings

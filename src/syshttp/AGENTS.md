@@ -9,10 +9,11 @@ self-contained. Development documentation lives with the source at
 Import names from their modules: `syshttp.env`, `syshttp.proxy`,
 `syshttp.session`, `syshttp.fetch`, `syshttp.jar`, `syshttp.cookies`,
 `syshttp.hooks`, `syshttp.tls`, `syshttp.retry`, `syshttp.auth`,
-`syshttp.autopatch`. The root
-re-exports `HTTPEnv` and the proxy functions most callers need.
+`syshttp.autopatch`. The
+root re-exports `HTTPEnv`, `NoReachableProxyError`, `proxy_map`,
+`configured_proxy` and `proxy_type`.
 
-`pip install syshttp` brings proxylib (the system's proxy configuration),
+`pip install syshttp` brings proxylib 2 (proxy routing and the system's proxy configuration),
 sslcontext (the system's TLS client; truststore on Python 3.10+) and
 importpatch (import-time patching of other HTTP clients, off unless
 `SYSHTTP_IMPORTPATCH` asks for it). The extra `pac`
@@ -69,84 +70,69 @@ Every function below that reads a setting takes `env: HTTPEnv | None = None`
 
 ## Proxy (`syshttp.proxy`)
 
+Routing is proxylib's (2.x): syshttp turns its settings into one proxylib
+proxy map, and proxylib's client integrations send through it. Read an
+answer with `proxylib.lookup(m, url)`; every proxylib integration takes the
+map (`ProxyMapAdapter`, `ProxyMapHandler`, `ProxyTransport`, `ProxySession`).
+
 ```python
-def proxy_url(*, url: str | None = None, env=None) -> str | None
-def configured_proxy_url(*, env=None) -> str | None
-def system_proxy(url: str, *, env=None) -> str | None
+def proxy_map(proxy: str | None = None, noproxy: str | None = None, proxy_user: str | None = None,
+              *, env=None) -> proxylib.ProxyMap
+def configured_proxy(*, env=None) -> proxylib.Proxy | None
+def system_map() -> proxylib.ProxyMap | None
 def system_proxy_enabled(*, env=None) -> bool
-def system_proxy_map() -> proxylib.ProxyMap | None
-def first_reachable(answer: tuple) -> proxylib.Proxy | None   # proxylib.first_working_proxy
-PROBE_MAX_AGE = 30; PROBE_TIMEOUT = 5.0
-class NoReachableProxyError(ConnectionError):  # proxies: tuple[str, ...] (host:port)
-def configured_authorization(*, env=None) -> str | None
-def proxy_authorization(url: str | None = None, *, configured: bool = True, env=None, target: str | None = None) -> str | None
-def resolve(url: str | None = None, *, configured: bool = True, env=None, target: str | None = None) -> tuple[str, str | None] | None
 def auth_header(*, env=None) -> str
 def proxy_type(*, env=None) -> tuple[str, str | None]
-def prefix_url(target: str, proxy: str | None = None, endpoint: str | None = None, *, env=None) -> str
-def no_proxy_from_env(*, env=None) -> str | None
-def should_bypass(host_or_url: str, no_proxy=<from env>, *, env=None) -> bool
-def bypassed_by(host: str, no_proxy: str | None) -> bool
-def proxies_from_env(*, env=None) -> dict | None
-def plan(proxy: str | None = None, noproxy: str | None = None, proxy_user: str | None = None, *, url: str | None = None, env=None) -> ProxyPlan | None
-def basic_authorization(user: str, password: str) -> str
-def userinfo(url: str | None) -> tuple[str, str] | None
-def strip_auth(url: str) -> str
-def redact(url: str | None) -> str | None
-class ProxyPlan:  # proxy, authorization, endpoint, no_proxy, auth_header; bypasses(url); gateway_base
+NoReachableProxyError = proxylib.NoReachableProxyError
+SYSTEM_PROXY_MAX_AGE = 60
 ```
 
-- `configured_proxy_url()` returns `<P>_PROXY`, else the first set of
-  `HTTPS_PROXY`, `https_proxy`, `HTTP_PROXY`, `http_proxy`, `ALL_PROXY`,
-  `all_proxy`. A bare `host:port` gets `http://`. Userinfo is kept as
-  configured. `proxy_url(url=...)` returns that, else `system_proxy(url)`.
-  Without `url` the system is not consulted: its answer depends on the URL.
-- `system_proxy(url)` is the proxy the system's configuration names for
-  `url`: WinHTTP on Windows, CFNetwork on macOS, libproxy or the desktop's
-  settings elsewhere, PAC scripts and WPAD included (proxylib's OS engine).
-  Its answer is a list (`PROXY a; PROXY b; DIRECT`): the first proxy whose
-  port accepts a TCP connection is used (`first_reachable`, proxylib's
-  `first_working_proxy`: `PROBE_TIMEOUT` seconds each, a proxy that did not
-  answer skipped for 30 s process-wide), and the pick is reused for
-  `PROBE_MAX_AGE` seconds per list. A DIRECT entry reached first is direct.
-  No reachable proxy and no DIRECT raises `NoReachableProxyError` (a
-  `ConnectionError`; also from `proxy_url()` and `plan()`), naming the proxies
-  as `host:port`. It returns `None` for DIRECT, for no opinion, when the
-  configuration cannot be read (logged at DEBUG, never raised), and when
-  `<P>_SYSTEM_PROXY` is off. A probe checks only that the port answers: a
-  proxy that accepts and then fails is not replaced by the next.
-  `system_proxy_map()` is the configuration, read once per
-  `SYSTEM_PROXY_MAX_AGE` (60) seconds.
-  `system_proxy_enabled()` reads `<P>_SYSTEM_PROXY` (`1`/`true`/`yes`/`on`
-  or their opposites; another value raises `ValueError` naming it).
-- The credential is the header value, sent verbatim. Order:
-  `<P>_PROXY_AUTH`, then `HTTP_PROXY_AUTH`, then the URL's userinfo as
-  `Basic`. `configured=False` skips the variables, for a proxy the caller
-  named (curl's `-x`).
-- `resolve()` returns `(proxy URL without userinfo, header value or None)`,
-  or `None` when no proxy is configured. Connect to the first half and send
-  the second. Never send both userinfo and a header.
-- `auth_header()` returns `<P>_PROXY_AUTH_HEADER`, default
-  `Proxy-Authorization`. A value with `:` or whitespace raises `ValueError`.
-- `proxy_type()` reads `<P>_PROXY_TYPE` and returns `("connect", None)`
-  (the default) or `("prefix", "/endpoint")` (endpoint default `/`).
-  Anything else raises `ValueError` naming the variable.
-- `prefix_url(target)` returns `<proxy without userinfo><endpoint><target>`,
-  with the target appended unchanged.
-- `should_bypass()` applies `NO_PROXY` / `no_proxy` (curl's list:
-  `host[:port]` suffixes, or `*`). Pass `no_proxy=` to replace the list, or
-  `None` for "never bypass". A URL with an unparseable port is not bypassed.
-- `plan(url=...)` makes the whole decision for a request to `url`. Order:
-  `proxy` (curl's `-x`), `<P>_PROXY` and the `*_PROXY` variables, then --
-  outside the bypass list -- the system's choice for `url`, which is always
-  `connect` (`<P>_PROXY_TYPE` describes `<P>_PROXY`). `proxy` is always
-  `connect` and never gets the configured credential. `proxy_user` (`-U`)
-  becomes Basic and wins over the configured credential. `noproxy` replaces
-  `NO_PROXY`. Returns `None` for direct. A malformed `<P>_PROXY_TYPE` or
-  `<P>_PROXY_AUTH_HEADER` raises `ValueError`, but only when a proxy would
-  be used.
-- `redact(url)` replaces the password with `***`. Print proxy URLs only
-  through it.
+- `proxy_map()` reads the settings at every lookup, so one map serves a
+  long-lived client, and always answers (never `KeyError`). Its answer is a
+  tuple of entries to try in order, `None` for DIRECT:
+  1. `NO_PROXY` / `no_proxy` hosts: DIRECT (proxylib's `BypassRules`:
+     suffixes, CIDR, ports, `*`; loopback always).
+  2. `<P>_PROXY` (`configured_proxy()`), alone.
+  3. Else the machine's proxy: when any of `HTTP_PROXY`, `HTTPS_PROXY`,
+     `FTP_PROXY`, `WS_PROXY`, `WSS_PROXY`, `ALL_PROXY` is set (either case),
+     those variables alone decide, per scheme (proxylib's `EnvProxyConfig`:
+     lowercase first, an uppercase `HTTP_PROXY` ignored under CGI, a PAC
+     result such as `PROXY a:1; DIRECT` read as a list); else the system's
+     configuration for the URL (`system_map()`), unless `<P>_SYSTEM_PROXY`
+     is off. `HTTP_PROXY_AUTH`, when set, is every such proxy's
+     `Proxy-Authorization` (SOCKS entries excepted).
+  4. Else DIRECT.
+- `proxy` (curl's `-x`) replaces 2 and 3 with that proxy, a plain one whose
+  credential is only its userinfo; `""` is DIRECT. `noproxy` (`--noproxy`)
+  replaces `NO_PROXY`. `proxy_user` (`-U user:password`) becomes the
+  credential of whichever proxy answers.
+- A malformed `<P>_PROXY`, `<P>_PROXY_TYPE` or `<P>_PROXY_AUTH_HEADER`
+  raises `ValueError` (proxylib's `ProxyParseError` for a URL) at lookup,
+  only when `<P>_PROXY` is set; a bad `<P>_SYSTEM_PROXY` only when the
+  system would be asked.
+- `configured_proxy()` is `<P>_PROXY` as a proxylib `Proxy` (a bare
+  `host:port` is `http`). Its credential is `<P>_PROXY_AUTH`, a header value
+  sent verbatim in `auth_header()` (`<P>_PROXY_AUTH_HEADER`, default
+  `Proxy-Authorization`; a value with `:` or whitespace raises `ValueError`)
+  in place of the userinfo, else the userinfo as Basic. It goes to that proxy
+  only: a `CONNECT`, or a plain-http request to it, never through the tunnel.
+  `<P>_PROXY_TYPE=prefix[:/endpoint]` (`proxy_type()`) makes it a
+  `prefix+http(s)` gateway: the request for `T` goes to
+  `<proxy><endpoint>T`, the credential a header of that request.
+- `system_map()` is `proxylib.auto_proxy(environ={})` (the OS resolver --
+  WinHTTP, CFNetwork, libproxy -- then the OS settings, PAC and WPAD
+  included), built once per `SYSTEM_PROXY_MAX_AGE` seconds, each URL's
+  answer cached as long. A configuration that cannot be read is `None`, and
+  a lookup that fails is no opinion: DIRECT, logged at DEBUG, never a failed
+  request.
+- Proxies never print their secrets: a `Proxy`'s `repr()` hides the password
+  and headers, `.url` has no credentials.
+- How an answer is used is the client integration's: requests, httpx and
+  aiohttp try the entries in order and move on when one does not connect
+  (the last error is raised; a DIRECT entry reached is direct); a client
+  that sends once takes the first reachable entry through
+  `proxylib.Probed(proxy_map())`, which raises `NoReachableProxyError` (a
+  `LookupError`) when none answers and the list holds no DIRECT.
 
 ## Session (`syshttp.session`, extra `session`)
 
@@ -160,21 +146,19 @@ def new_session(*, user_agent: str | None = None, proxies: dict | None = None,
                 proxy_ssl_context: ssl.SSLContext | None = None) -> requests.Session
 ```
 
-- One transport adapter decides the proxy for every request, including a
-  bare `session.send()` and every redirect hop: `proxy.plan(url=<that URL>,
-  env=env)`, so the environment is read as it is then and the system's answer
-  follows a PAC script host by host. `adapter.route(url)` returns that
-  decision (`session.get_adapter(url).route(url)`). When no proxy of the
-  system's list answers and it holds no DIRECT, the request raises
-  `requests.exceptions.ProxyError` (caused by `NoReachableProxyError`). A `NO_PROXY`
-  host goes direct without the credential. A `connect` proxy is passed
-  explicitly per request, so `HTTP_PROXY` cannot win through `trust_env`.
-  The credential goes on the plain-http request and the https `CONNECT`,
-  only to that proxy. A prefix gateway gets `<proxy><endpoint><url>` with
-  the credential as a request header. `response.url`, `response.request`
-  and `response.cookies` keep the caller's URL.
-- `proxies=` given by you is handed to requests unchanged. It gets the
-  configured credential only when one of its URLs is the configured proxy.
+- One transport adapter, `ProxyAdapter` (a subclass of proxylib's
+  `ProxyMapAdapter` that adds only the TLS below), routes every request,
+  including a bare `session.send()` and every redirect hop, by
+  `proxy.proxy_map(env=env)`: the environment as it is then, and the
+  system's answer host by host. `adapter.route(url)` returns the entries it
+  will try (`session.get_adapter(url).route(url)`). They are tried in order,
+  the next when one does not connect; the last error is raised
+  (`requests.exceptions.ProxyError` for a proxy). The environment's
+  `HTTP_PROXY` cannot win through `trust_env`. A prefix gateway's response
+  keeps the caller's request and URL, so redirects and cookies belong to the
+  target.
+- `proxies=` given by you is handed to requests unchanged: the map then has
+  no opinion, and no syshttp credential is added.
 - `verify=True` verifies through `tls.os_ssl_context()` (the OS verifier)
   and names no CA file. A path, or `REQUESTS_CA_BUNDLE` / `CURL_CA_BUNDLE`,
   names a bundle. `verify=False` is left to requests.
@@ -326,7 +310,8 @@ def retry_after(headers: Iterable[tuple[str, str]], now: float | None = None) ->
 
 ```python
 SETTING = "SYSHTTP_IMPORTPATCH"
-TARGETS = {"requests": "requests", "urllib": "urllib.request", "httpx": "httpx", "aiohttp": "aiohttp"}
+TARGETS = {"requests": "requests", "urllib": "urllib.request", "httpx": "httpx", "aiohttp": "aiohttp",
+           "pip": "pip._vendor.requests"}
 def setting_name(*, env=None) -> str
 def enabled(*, env=None) -> frozenset[str]
 def importpatch(name: str, module: ModuleType) -> None   # importpatch's entry point
@@ -352,55 +337,53 @@ def patched() -> tuple[str, ...]
   says (every installed target by default; a named one that is not installed
   raises its `ImportError`, an unknown name `ValueError`); `unpatch()` undoes
   them, though a client built while patched keeps what it was given.
-- What a patched library does: a request with no proxy of the caller's is
-  routed by `proxy.plan(url=...)` (`<P>_PROXY`, the `*_PROXY` variables,
-  `NO_PROXY`, then the system's first reachable proxy), credential included;
-  with verification on and no TLS argument of the caller's it is verified
-  with `tls.os_ssl_context()`. No reachable proxy raises the library's proxy
-  error.
-  - **requests**: every new `Session` mounts the dynamic `ProxyAdapter`. A
-    proxy the caller set (`proxies=`, `session.proxies`) that the
-    environment would not have picked is used as given, without syshttp's
-    credential; `session.trust_env = False` is sent as requests would.
-    `requests.exceptions.ProxyError` when no proxy is reachable.
-  - **urllib**: `urllib.request.ProxyHandler` built without a mapping (as
-    every default opener builds it) routes each request and redirect hop; one
-    built with a mapping is the standard handler. `ssl._create_default_https_context`
-    returns a system context, so `http.client` and every caller that gives no
-    context verify with it (one context of its own, shared 60 s: http.client
-    sets ALPN on it). A credential under another header than
-    `Proxy-Authorization` through an https `connect` proxy is refused
-    (`URLError`): urllib would send it to the origin. `URLError` when no proxy
-    is reachable.
+- What a patched library does: routing is proxylib's integration for that
+  client (`proxylib.patch(proxy.proxy_map(), targets=[name])`, the newest
+  patch winning, as proxylib's own `PROXYLIB_IMPORTPATCH` would install it);
+  TLS is syshttp's: with verification on and no TLS argument of the
+  caller's, the system's context.
+  - **requests**: new `Session`s mount proxylib's `ProxyMapAdapter`:
+    entries tried in order, a caller's `proxies` entry at the
+    `scheme://hostname` key wins (a bare `"http"` key, or one requests adds
+    from the environment, does not; `trust_env = False` is not an opt-out).
+    Every `HTTPAdapter` with `verify=True` and no context of its own pool
+    manager verifies with `tls.os_ssl_context()` (requests 2.32.2+).
+  - **urllib**: proxylib's global opener (installed when the program has
+    not installed its own) routes `urlopen`, through the first reachable
+    entry (`Probed`; none reachable: `URLError` whose `reason` is
+    `NoReachableProxyError`). A credential under another header than
+    `Proxy-Authorization` cannot go to an https proxy:
+    `proxylib.UnsupportedProxyError`. `ssl._create_default_https_context`
+    returns a system context, so `http.client` and every caller that gives
+    no context verify with it (one context of its own, shared 60 s:
+    http.client sets ALPN on it).
   - **httpx**: `Client` / `AsyncClient` built without `transport`, `proxy`,
-    `proxies` or `mounts` and with `trust_env` get a routing transport (one
-    inner transport per proxy); `verify` left at `True` becomes the system
+    `proxies` or `mounts` get proxylib's `ProxyTransport` /
+    `AsyncProxyTransport`; `verify` left at `True` becomes the system
     context (a fresh one offering no store certificate when `cert=` is
-    given). The async transport decides the route on a worker thread.
-    `httpx.ProxyError` when no proxy is reachable.
-  - **aiohttp**: `ClientSession` requests without `proxy=` are routed
-    (aiohttp reads no proxy itself unless `trust_env`; that is not an
-    opt-out here), decided on the loop's executor; the credential rides in
-    `proxy_headers` for https (the CONNECT) and in the request's headers for
-    http (the request goes to the proxy). `ssl` left at `True` with no
+    given).
+  - **aiohttp**: `ClientSession` requests without `proxy=` are routed by
+    proxylib, with failover. A URL-prefix gateway is not followed:
+    `proxylib.UnsupportedProxyError`. `ssl` left at `True` with no
     `ssl_context` / `verify_ssl` / `fingerprint` becomes the system context.
-    `aiohttp.ClientConnectionError` when no proxy is reachable.
-- Not patched: urllib3 used directly, pip's vendored requests, websocket
-  libraries. proxylib 2 adds its own import patches for requests and urllib
-  (`PROXYLIB_AUTO_PATCH`, routing only); enable one of the two.
+  - **pip** (`pip._vendor.requests`): pip keeps its own TLS context
+    (truststore). Routing needs a proxylib release with a `pip` patch
+    target; until then naming `pip` changes nothing (logged at DEBUG).
+- Not patched: urllib3 used directly, websocket libraries.
 
 ## Environment variables
 
 | Variable | Sets | Default |
 | --- | --- | --- |
 | `SYSHTTP_PREFIX` | the prefix `<P>` of every variable below | `SYSHTTP` |
-| `<P>_PROXY` | the proxy URL (`http://`, `https://`, or a bare `host:port`) | `HTTPS_PROXY` → `HTTP_PROXY` → `ALL_PROXY`, either case, then the system's configuration for the URL |
+| `<P>_PROXY` | the proxy URL (`http://`, `https://`, or a bare `host:port`) | the request's scheme's `*_PROXY` variable, else `ALL_PROXY` (lowercase first); with none set, the system's configuration for the URL |
 | `<P>_SYSTEM_PROXY` | whether the system's proxy configuration is consulted (boolean) | on |
-| `<P>_PROXY_AUTH` | **secret**: the proxy credential, a header value sent verbatim | `HTTP_PROXY_AUTH`, else the URL's userinfo as Basic |
-| `<P>_PROXY_AUTH_HEADER` | the header name the credential rides in | `Proxy-Authorization` |
+| `<P>_PROXY_AUTH` | **secret**: `<P>_PROXY`'s credential, a header value sent verbatim | the URL's userinfo as Basic |
+| `HTTP_PROXY_AUTH` | **secret**: the machine's proxy's credential (a `*_PROXY` variable's or the system's), as `Proxy-Authorization` | the URL's userinfo as Basic |
+| `<P>_PROXY_AUTH_HEADER` | the header name `<P>_PROXY_AUTH` rides in | `Proxy-Authorization` |
 | `<P>_PROXY_TYPE` | `connect` or `prefix[:/endpoint]` | `connect` |
 | `<P>_HOME` | the jar root | the per-user state directory |
-| `SYSHTTP_IMPORTPATCH` (`<PREFIX>_SYSHTTP_IMPORTPATCH` under a prefix of its own) | which client libraries are patched on import (`1` for all, or `:`-separated names) | none |
+| `SYSHTTP_IMPORTPATCH` (`<PREFIX>_SYSHTTP_IMPORTPATCH` under a prefix of its own) | which client libraries are patched on import (`1` for all, or `:`-separated names: `requests`, `urllib`, `httpx`, `aiohttp`, `pip`) | none |
 | `<P>_HOOKS_<KEY>` (+ `_PY`, `_CURL`) | a URL hook | none |
 | `<P>_HOOK_SKIP` | KEYs of hooks not to run, comma list | none |
 | `NO_PROXY` / `no_proxy` | hosts that go direct | none |
@@ -412,7 +395,7 @@ def patched() -> tuple[str, ...]
   would. `<P>_SYSTEM_PROXY=0` stops that.
 - `SYSHTTP_PREFIX=MYTOOL` renames every setting. `SYSHTTP_PROXY` is then
   ignored and `MYTOOL_PROXY` is read.
-- A malformed `<P>_PROXY_TYPE` is harmless until a proxy is in use.
+- A malformed `<P>_PROXY_TYPE` is harmless until `<P>_PROXY` is set.
 - The jar constructors create their directory. Pass `root=` to keep them out
   of the user's state directory.
 - A client certificate loaded into the context you pass is used for every

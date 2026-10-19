@@ -50,6 +50,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Routing is proxylib 2's (`proxylib>=2.0,<3`). `proxy.proxy_map(proxy,
+  noproxy, proxy_user, *, env)` is the settings as one proxylib proxy map,
+  read at each lookup; `proxy.configured_proxy()` is `<PREFIX>_PROXY` as a
+  proxylib `Proxy`; `proxy.system_map()` is the system's configuration
+  (`proxylib.auto_proxy`). The `*_PROXY` variables are read per scheme
+  (lowercase first, httpoxy-safe), `NO_PROXY` takes CIDR entries, and curl's
+  `-x ""` is direct. `<PREFIX>_PROXY_AUTH` goes to `<PREFIX>_PROXY` only and
+  `HTTP_PROXY_AUTH` to the machine's proxies only.
+- A list from the system (`PROXY a; PROXY b; DIRECT`) is tried in order by the
+  session, httpx and aiohttp (proxylib's failover), replacing the probe of
+  the entry above; urllib takes the first reachable entry. No proxy
+  connecting and no DIRECT is the client's own connection error;
+  `NoReachableProxyError` is proxylib's.
+- The session's `ProxyAdapter` is proxylib's `ProxyMapAdapter` with the
+  system's TLS; `adapter.route(url)` returns the entries it will try.
+  `proxies=` given to `new_session` are requests' own, with no syshttp
+  credential added.
+- `syshttp.autopatch` routes through `proxylib.patch()` and patches TLS only;
+  requests' TLS is a pool hook on every `HTTPAdapter`. A caller's
+  `scheme://hostname` proxy entry wins over the system, a bare `"http"` key
+  does not, and `trust_env = False` no longer opts out. aiohttp is not offered
+  URL-prefix gateways. New target `pip` (`pip._vendor.requests`), routed once
+  proxylib has a `pip` target; pip keeps its own TLS context.
+
+### Removed
+
+- `proxy.proxy_url`, `configured_proxy_url`, `system_proxy`,
+  `system_proxy_map`, `first_reachable`, `PROBE_MAX_AGE`, `PROBE_TIMEOUT`,
+  `resolve`, `proxy_authorization`, `configured_authorization`, `userinfo`,
+  `basic_authorization`, `strip_auth`, `redact`, `prefix_url`,
+  `should_bypass`, `bypassed_by`, `no_proxy_from_env`, `proxies_from_env`,
+  `plan` and `ProxyPlan`: `proxy_map()` and proxylib's `Proxy` replace them.
+
+### Changed (earlier)
+
 - The package stands alone as `syshttp`. It was previously the `httplib`
   library of the dotagents `net` overlay, which shipped with a curl-compatible
   command (`httplib.cli`, `python -m httplib`) that is now the `curlike`
