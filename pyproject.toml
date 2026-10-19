@@ -28,7 +28,7 @@ classifiers = [
 dependencies = [
     # The system's proxy configuration (WinHTTP, macOS, libproxy/desktops; PAC
     # and WPAD) is the default route when no proxy variable is set.
-    "proxylib>=2.0,<3",
+    "proxylib>=2.0.1,<3",
     # The system's TLS client: the OS verifies certificates (through
     # truststore on Python 3.10+) and a server asking for a client certificate
     # gets one from the OS store, chosen as a browser would.
@@ -51,7 +51,7 @@ aiohttp = "syshttp.autopatch"
 session = ["requests>=2.25,<3"]
 # A JavaScript engine for PAC scripts proxylib evaluates itself (Linux without
 # libproxy); Windows and macOS evaluate PAC in the OS.
-pac = ["proxylib[pac]>=2.0,<3"]
+pac = ["proxylib[pac]>=2.0.1,<3"]
 # The tests exercise every extra, so dev refers to them rather than repeating
 # their ranges.
 # httpx and aiohttp are what syshttp.autopatch patches; the tests use them.

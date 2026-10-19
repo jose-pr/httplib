@@ -162,7 +162,9 @@ def test_unpatch_restores_every_library(patched):
     assert not hasattr(requests.adapters.HTTPAdapter.cert_verify, "__wrapped__")
     assert ssl._create_default_https_context is not autopatch._default_https_context
     with httpx.Client() as client:
-        assert client._transport._transports._kwargs.get("verify", True) is True
+        # proxylib's own transport when it has something to read, else httpx's.
+        inner = getattr(client._transport, "_transports", None)
+        assert inner is None or inner._kwargs.get("verify", True) is True
 
 
 # ---- requests ----------------------------------------------------------------
@@ -362,3 +364,16 @@ def test_pip_is_a_target_and_keeps_its_own_tls():
     finally:
         autopatch.unpatch()
     assert autopatch.enabled(env=HTTPEnv(environ={"SYSHTTP_IMPORTPATCH": "pip._vendor.requests"})) == {"pip"}
+
+
+def test_pip_goes_through_the_configured_proxy(configured, target):
+    """pip's own session class, as pip builds it: it mounts its adapters after
+    Session.__init__, and still routes."""
+    session_module = pytest.importorskip("pip._internal.network.session")
+    autopatch.patch(["pip"])
+    try:
+        with session_module.PipSession() as session:
+            resp = session.get(target + "/x", timeout=5)
+        assert resp.text == "via-proxy" and _Proxy.seen[-1] == (target + "/x", BEARER)
+    finally:
+        autopatch.unpatch()
