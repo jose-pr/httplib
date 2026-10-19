@@ -13,7 +13,7 @@ Import names from their modules: `syshttp.env`, `syshttp.proxy`,
 root re-exports `HTTPEnv`, `NoReachableProxyError`, `proxy_map`,
 `configured_proxy` and `proxy_type`.
 
-`pip install syshttp` brings proxylib 2 (proxy routing and the system's proxy configuration),
+`pip install syshttp` brings proxylib 2.0.1+ (proxy routing and the system's proxy configuration),
 sslcontext (the system's TLS client; truststore on Python 3.10+) and
 importpatch (import-time patching of other HTTP clients, off unless
 `SYSHTTP_IMPORTPATCH` asks for it). The extra `pac`
@@ -367,10 +367,14 @@ def patched() -> tuple[str, ...]
     proxylib, with failover. A URL-prefix gateway is not followed:
     `proxylib.UnsupportedProxyError`. `ssl` left at `True` with no
     `ssl_context` / `verify_ssl` / `fingerprint` becomes the system context.
-  - **pip** (`pip._vendor.requests`): pip keeps its own TLS context
-    (truststore). Routing needs a proxylib release with a `pip` patch
-    target; until then naming `pip` changes nothing (logged at DEBUG).
+  - **pip** (`pip._vendor.requests`): every adapter pip mounts routes
+    through the map, as proxylib's `pip` target does; `pip --proxy` and
+    `--no-proxy-env` keep pip's own choice. pip keeps its own TLS context
+    (truststore).
 - Not patched: urllib3 used directly, websocket libraries.
+- proxylib's own `PROXYLIB_AUTOPROXY` names clients that use
+  `proxylib.auto_proxy()`; a client syshttp patches uses syshttp's map
+  instead (the newer patch wins).
 
 ## Environment variables
 
