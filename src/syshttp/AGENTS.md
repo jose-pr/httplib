@@ -226,21 +226,54 @@ class CookieSpec: domain: str; path: str; secure: bool; expires: int | None; nam
 def load_netscape(path: Path) -> list[CookieSpec]
 def save_netscape(session_cookies: Iterable[CookieLike], path: Path) -> None
 def cookie_applies(cookie: CookieSpec, url: str, now: float | None = None) -> bool
-def set_cookie_specs(values: Iterable[str], default_domain: str, now: float | None = None) -> list[tuple[CookieSpec, bool]]
+def set_cookie_specs(values: Iterable[str], default_domain: str, now: float | None = None, *,
+                     request_path: str = "/") -> list[tuple[CookieSpec, bool]]
 def domain_covers(domain: str, host: str) -> bool
 def apply_to_session(session, cookies: Iterable[CookieSpec]) -> None
 def merge_set_cookie_headers(session, response) -> None
+def host_only_policy() -> http.cookiejar.DefaultCookiePolicy
 HTTP_ONLY_PREFIX = "#HttpOnly_"
+MAX_COOKIE_AGE = 400 * 24 * 3600
 ```
 
-- `load_netscape` returns `[]` for a missing file and reads `#HttpOnly_`
-  rows. `save_netscape` writes them as curl does.
+- `load_netscape` returns `[]` for a missing file, reads `#HttpOnly_` rows,
+  keeps a row whose value is empty and treats an unreadable expiry as a
+  session cookie. `save_netscape` writes `#HttpOnly_` rows as curl does.
 - `cookie_applies` decides as curl does: the domain (a subdomain only with a
   leading dot or the include-subdomains flag, and an IP only matches
   itself), the RFC 6265 path match, `Secure` only over https or to loopback,
   not expired (`0` / `None` is a session cookie).
-- `set_cookie_specs` returns `(cookie, gone)` per `Set-Cookie` value. `gone`
-  marks a cookie the server expired. Unparseable headers are skipped.
+- `set_cookie_specs` returns `(cookie, gone)` per `Set-Cookie` value, parsed
+  as RFC 6265 section 5.2 reads it: the name and value up to the first `;`
+  (a value may hold spaces, `=` or JSON), attribute names in any case,
+  unknown attributes (`Priority`, `Partitioned`) ignored, `Max-Age` beating
+  `Expires` in either order, an HTTP date in any of its three forms read as
+  UTC, and an expiry beyond 400 days cut to `MAX_COOKIE_AGE`. A header with
+  no `name=value` is skipped. `gone` marks a cookie the server expired (an
+  empty value, `Max-Age` of zero or less, a past date).
+  - `default_domain` is the host asked. A `Domain` attribute is kept only
+    when that host domain-matches it, on a set and on a deletion alike;
+    otherwise the cookie is skipped. It then gives `subdomains=True`. With no
+    `Domain`, or with one equal to an IP-literal host, the cookie is
+    host-only. A `Domain` that is a public suffix is skipped unless it
+    equals the host (`localhost`, `wiki`), which gives a host-only cookie.
+  - A public suffix is recognised without the Public Suffix List: a name
+    with no dot (a top level domain) or a registry under a two-letter country
+    code (`co.uk`, `com.au`). A shared suffix such as `github.io` is not
+    recognised, so a site there can set a `Domain` cookie for it.
+  - A cookie with no `Path` gets the directory of `request_path` (the
+    request's path; RFC 6265 section 5.1.4: `/app/login` is `/app`).
+- `apply_to_session` loads rows into a requests session with their flags. A
+  row that is not a domain cookie (no leading dot, flag `FALSE`) stays on its
+  host, `localhost` and other single-label hosts included. `new_session`
+  gives its session `host_only_policy()`, which this needs: requests'
+  default also sends such a cookie to subdomains.
+- `merge_set_cookie_headers(session, response)` applies the deletions that
+  requests' own extraction misses (a `Domain` that differs from how the
+  cookie was stored, an empty value), for the response and its redirect
+  hops. It sets nothing: requests stores each cookie once, against the URL
+  the caller asked for.
+- `FileCookieJar` keeps `HttpOnly` and the include-subdomains flag.
 
 ## URL hooks (`syshttp.hooks`)
 
@@ -304,8 +337,9 @@ def retry_after(headers: Iterable[tuple[str, str]], now: float | None = None) ->
 - `os_ssl_context()` is shared for `OS_CONTEXT_MAX_AGE` seconds, because
   urllib3 pools by context object. Never load a client certificate into it;
   use `new_os_context(client_certificates=False)`.
-- `retry_after` reads a number of seconds or an HTTP date. It returns
-  `None` when the header is absent or unreadable.
+- `retry_after` reads a number of seconds (the digits `0-9` only) or an HTTP
+  date, a date without a zone being UTC. It returns `None` when the header
+  is absent or unreadable.
 
 ## Import-time patching (`syshttp.autopatch`)
 

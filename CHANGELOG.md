@@ -128,5 +128,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - The proxy credential reaches a proxy whose host is configured in upper
   case. requests lower-cases the proxy URL it hands to `proxy_headers`, so the
   credential used to be dropped and the proxy answered 407.
+- `Set-Cookie` is read as RFC 6265 section 5.2 reads it, not through
+  `http.cookies.SimpleCookie`: a value with a space or JSON is kept, an
+  unknown attribute (`Priority`, `Partitioned`) is no longer a cookie of its
+  own, `Max-Age` beats `Expires`, and a header with no `name=value` is
+  skipped. A `Domain` without a leading dot covers subdomains. A cookie with
+  no `Path` gets the directory of the request path
+  (`set_cookie_specs(..., request_path=)`).
+- A session holds one copy of each cookie. `merge_set_cookie_headers` no
+  longer re-sets what requests already stored (it used to add a second copy
+  with path `/` and a dotless domain); it applies only the deletions requests
+  misses, for redirect hops too.
+- A cookie set without `Domain` stays on its host: rows loaded from a jar and
+  cookies a server sets are no longer sent to subdomains
+  (`new_session` uses `cookies.host_only_policy()`).
+- A cookie for a single-label host (`localhost`, `wiki`) is loaded from its
+  jar file, and is saved under its own name instead of `localhost.local`.
+- `FileCookieJar` keeps `HttpOnly` and the include-subdomains flag.
+- `load_netscape` keeps a row whose value is empty, and an expiry written
+  with a non-ASCII digit is a session cookie instead of a `ValueError`.
+  `retry_after` returns `None` for such a value, and reads an HTTP date
+  written without a zone (`asctime`) as UTC.
+- A cookie expiry beyond 400 days is cut to 400 days.
+
+### Security
+
+- A `Set-Cookie` can no longer name a domain its host does not own. Any
+  host could set or delete another host's cookie (`Domain=bank.example` from
+  `evil.example`) or one for a top level domain; such a header is now skipped
+  on a set and on a deletion, in the session, in `FileCookieJar` and in
+  `set_cookie_specs` (which curlike's `-c` uses). A public suffix is
+  recognised without the Public Suffix List (a name with no dot, or a
+  `co.uk`-style registry).
 
 [Unreleased]: https://github.com/jose-pr/syshttp/commits/main
