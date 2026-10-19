@@ -190,6 +190,9 @@ def new_session(*, user_agent: str | None = None, proxies: dict | None = None,
   `Authorization` header or `auth=` wins. A token containing a CR, LF or NUL
   raises `ValueError` naming the jar key, never the value.
 - `user_agent` replaces the session's `User-Agent` header.
+- A status in `status_forcelist` that outlasts `retries` is returned as the
+  response (`raise_on_status=False`), as plain requests returns it; a
+  connection that never succeeds still raises.
 - `_PY` URL hooks run inside `session.request`, on the caller's URL. Requests
   a hook makes through the session do not run hooks again; the guard is per
   thread, so another thread's requests still run them.
@@ -202,15 +205,24 @@ def new_session(*, user_agent: str | None = None, proxies: dict | None = None,
 def request_text(session, method, url, *, headers=None, data=None, json_body=None, timeout=60, verify=None) -> tuple[int, str]
 def request_json(session, method, url, *, ...same...) -> tuple[int, Any]
 def request_with_reauth(session, method, url, *, ...same..., auth_fail_statuses=(401, 403), reauth_cb=None, auth_provider=None) -> tuple[int, str]
-def request_text_auto(method, url, *, session=None, <new_session options>, env=None, ssl_context=None, proxy_ssl_context=None, headers=None, data=None, json_body=None, timeout=60) -> tuple[int, str]
+def request_text_auto(method, url, *, session=None, headers=None, data=None, json_body=None, timeout=60, **session_options) -> tuple[int, str]
 def request_json_auto(method, url, *, ...same...) -> tuple[int, Any]
 ```
 
+- `timeout` is seconds or a `(connect, read)` pair, as requests takes it.
+- A status is never an exception: a status in the session's `status_forcelist`
+  that outlasts its retries comes back as `(status, text)`. A connection that
+  never succeeds, or a timeout, raises requests' exception.
 - `request_json` returns `(status, None)` for an empty body. A body that is
   not JSON raises `ValueError` naming the status.
+- `verify=` is requests' per-request value; beside a session's `ssl_context`
+  it raises `ValueError`.
 - `request_with_reauth` retries once after a status in `auth_fail_statuses`,
   calling `auth_provider.ensure()` and then `reauth_cb()` first.
-- The `*_auto` helpers build a `new_session(...)` when `session` is `None`.
+- The `*_auto` helpers send through `session` when it is given (left open),
+  else through `new_session(**session_options)`, which they close after the
+  call: `session_options` is any keyword of `new_session` (`env`, `proxies`,
+  `retries`, `ssl_context`, ...), and the defaults are `new_session`'s.
 
 ## Jars (`syshttp.jar`)
 

@@ -79,6 +79,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - The jar constructors (`FileCookieJar`, `FileTokenJar`) no longer create
   their directory; it is created at the first write.
 
+- A session returns the last response when a status in `status_forcelist`
+  outlasts its retries, as plain requests does; it used to raise
+  `requests.exceptions.RetryError`, which the fetch helpers (`-> (status,
+  text)`) passed on. The `*_auto` helpers take `new_session`'s options as
+  `**session_options` (every keyword they had still works) and their
+  `timeout` may be a `(connect, read)` pair.
 - The `session` extra requires `requests>=2.32.3` and `urllib3>=2.0.2`
   (was `requests>=2.25`). Below 2.32.3 a caller's `ssl_context` was silently
   ignored, and urllib3 1.26 raises a bare `ValueError` for an https IP-literal
@@ -159,6 +165,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `retry_after` returns `None` for such a value, and reads an HTTP date
   written without a zone (`asctime`) as UTC.
 - A cookie expiry beyond 400 days is cut to 400 days.
+- `request_text_auto` and `request_json_auto` retry a 408 by default, as
+  `new_session` does (their own list had dropped it), and close the session
+  they built instead of leaking its connection pool. The five fetch helpers
+  have docstrings.
 - `new_session(user_agent=...)` sets the User-Agent; the default
   `python-requests/x` was sent whatever was given.
 - The guards that keep a hook or `auth_provider.ensure` from running again for
