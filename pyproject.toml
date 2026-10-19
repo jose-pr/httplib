@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "syshttp"
-version = "0.1.0.dev1"
+version = "0.1.0.dev2"
 authors = [{ name = "jose-pr", email = "jose-pr@coqui.dev" }]
 description = "HTTP plumbing that follows the system: the system proxy (PAC, WPAD) and the OS certificate verifier by default, proxy credentials and prefix gateways, Netscape cookie jars, OS trust-store TLS, URL hooks, and an optional requests session"
 readme = "README.md"
@@ -29,9 +29,10 @@ dependencies = [
     # The system's proxy configuration (WinHTTP, macOS, libproxy/desktops; PAC
     # and WPAD) is the default route when no proxy variable is set.
     "proxylib>=1.0,<2",
-    # The OS verifies certificates (CryptoAPI, Security framework); truststore
-    # needs Python 3.10, and 3.9 keeps the stdlib's default context.
-    'truststore>=0.10.0,<0.11; python_version >= "3.10"',
+    # The system's TLS client: the OS verifies certificates (through
+    # truststore on Python 3.10+) and a server asking for a client certificate
+    # gets one from the OS store, chosen as a browser would.
+    "sslcontext>=2.0.0,<3",
 ]
 
 [project.optional-dependencies]

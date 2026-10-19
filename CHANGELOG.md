@@ -48,13 +48,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `AGENTS_HOME` → `SYSHTTP_HOME`, `NET_HOOKS_<KEY>` → `SYSHTTP_HOOKS_<KEY>`,
   `NET_HOOK_*` → `SYSHTTP_HOOK_*`. To keep the `AGENTS_*` names, set
   `SYSHTTP_PREFIX=AGENTS` (hooks are then `AGENTS_HOOKS_<KEY>`).
-- Certificates are verified by the operating system by default:
-  `tls.new_os_context()` (and so `os_ssl_context()` and every session with
-  `verify=True`) returns a `truststore.SSLContext` on Python 3.10+ (truststore
-  is a new dependency there): CryptoAPI on Windows, the Security framework on
-  macOS, OpenSSL over the system store elsewhere. Python 3.9 keeps
-  `ssl.create_default_context()`. A `cafile` / `capath` still replaces the
-  store with a plain `ssl` context.
+- The system's TLS client by default: `tls.new_os_context()` (and so
+  `os_ssl_context()` and every session with `verify=True`) returns
+  `sslcontext.system_context()` (sslcontext 2 is a new dependency).
+  Certificates are verified by the operating system on Python 3.10+
+  (CryptoAPI on Windows, the Security framework on macOS, OpenSSL over the
+  system store elsewhere), by OpenSSL over the default store on 3.9, and a
+  server that asks for a client certificate gets one from the OS store,
+  chosen as a browser chooses. `new_os_context(client_certificates=False)`
+  offers none, for a caller loading its own. A `cafile` / `capath` still
+  replaces the store with a plain `ssl` context.
 - A session without caller `proxies` decides the proxy for every request and
   every redirect hop, from the environment as it is then and the system's
   answer for that URL. A direct decision is final: requests' `trust_env` cannot

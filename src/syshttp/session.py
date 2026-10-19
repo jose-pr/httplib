@@ -16,10 +16,10 @@ same place, on the caller's URL, before the request: a hook may log in, set
 headers in the request's kwargs, or return a response of its own. A hook
 that makes requests through the session does not trigger hooks again.
 
-TLS verification uses the OS trust store directly: with ``verify=True`` the
-adapter hands urllib3 an ``ssl.create_default_context()`` (the certificate
-store on Windows, OpenSSL's system defaults elsewhere) and no CA file, so no
-``certifi`` bundle is involved. ``verify=<path>`` and ``REQUESTS_CA_BUNDLE`` /
+TLS is the system's: with ``verify=True`` the adapter hands urllib3
+``tls.os_ssl_context()`` (sslcontext's system context: the OS verifies
+servers, and a client certificate comes from the OS store when a server asks)
+and no CA file, so no ``certifi`` bundle is involved. ``verify=<path>`` and ``REQUESTS_CA_BUNDLE`` /
 ``CURL_CA_BUNDLE`` still name a bundle explicitly; ``verify=False`` is left to
 requests. ``ssl_context=`` replaces all of that with a context of the caller's
 own -- a client certificate (a keystore identity too), a cipher list, a
