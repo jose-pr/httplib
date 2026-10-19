@@ -23,15 +23,14 @@ import functools
 import importlib
 import logging
 import ssl
+import sys
 import threading
 import time
 from types import ModuleType
 from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Tuple
 
-import proxylib
-
-from . import proxy as _proxy
-from . import tls as _tls
+# Neither proxylib nor syshttp.proxy is imported here: proxylib's own import
+# of urllib.request runs this module's hook while proxylib is half built.
 from .env import DEFAULT_PREFIX, HTTPEnv
 
 __all__ = ["SETTING", "TARGETS", "enabled", "importpatch", "patch", "patched", "setting_name", "unpatch"]
@@ -92,6 +91,7 @@ def enabled(*, env: Optional[HTTPEnv] = None) -> FrozenSet[str]:
 def importpatch(name: str, module: ModuleType) -> None:
     """importpatch's entry point: patch ``module``, just imported as ``name``,
     when :func:`setting_name` enables it."""
+    _flush()
     target = _BY_MODULE.get(name)
     if target is not None and target in enabled():
         _apply(target, module)
@@ -106,6 +106,7 @@ def patch(targets: Optional[Iterable[str]] = None) -> Tuple[str, ...]:
     for name in names:
         if name not in TARGETS:
             raise ValueError("%r is not one of %s" % (name, ", ".join(TARGETS)))
+    _flush()
     done = []
     for name in names:
         try:
@@ -140,23 +141,29 @@ def _apply(name: str, module: ModuleType) -> None:
         if name in _undo:
             return
         steps: List[Callable[[], None]] = []
-        route = _ROUTES[name]
-        if route is not None:
-            if name in proxylib.patching.targets():
-                # Before the TLS patch: syshttp's wrappers then run first and
-                # hand proxylib's transports the system context.
-                steps.append(proxylib.patch(route(), targets=[name]).undo)
-            else:
-                _log.debug("proxylib %s has no %r patch target: %s is not routed", proxylib.__version__, name, name)
+        if _initializing("proxylib") or _initializing("syshttp.proxy"):
+            steps.append(_defer(name, module))
+        else:
+            # Before the TLS patch: syshttp's wrappers then run first and
+            # hand proxylib's transports the system context.
+            steps.extend(_route(name))
         tls = _TLS[name]
         if tls is not None:
             steps.append(tls(module))
         _undo[name] = steps
 
 
+def _initializing(name: str) -> bool:
+    """Whether module ``name`` is being imported right now (half built)."""
+    module = sys.modules.get(name)
+    return module is not None and bool(getattr(getattr(module, "__spec__", None), "_initializing", False))
+
+
 def _context(certificate: bool = False) -> ssl.SSLContext:
     """The system's context; a fresh one offering no store certificate when
     the caller loads a certificate of its own into it."""
+    from . import tls as _tls
+
     if certificate:
         return _tls.new_os_context(client_certificates=False)
     return _tls.os_ssl_context()
@@ -165,29 +172,78 @@ def _context(certificate: bool = False) -> ssl.SSLContext:
 # ---- routing -----------------------------------------------------------------
 
 
+def _route(name: str) -> List[Callable[[], None]]:
+    """``proxylib.patch`` with syshttp's map for target ``name``; nothing
+    when this proxylib has no such target."""
+    import proxylib
+
+    from . import proxy as _proxy
+
+    if name not in proxylib.patching.targets():
+        _log.debug("proxylib %s has no %r patch target: %s is not routed", proxylib.__version__, name, name)
+        return []
+    proxymap = _URLErrorMap(_proxy.proxy_map()) if name == "urllib" else _proxy.proxy_map()
+    return [proxylib.patch(proxymap, targets=[name]).undo]
+
+
+# Targets whose routing waits for proxylib to finish importing -> their undo
+# steps once routed (None until then).
+_pending: Dict[str, Optional[List[Callable[[], None]]]] = {}
+
+
+def _defer(name: str, module: ModuleType) -> Callable[[], None]:
+    """Route ``name`` once proxylib is importable: at the next patch, or for
+    urllib (the only client proxylib imports itself) at the first
+    ``urlopen``, the call proxylib's urllib integration serves."""
+    _pending[name] = None
+    undo_opener: Callable[[], None] = lambda: None
+    if name == "urllib":
+        original = getattr(module, "urlopen")
+
+        @functools.wraps(original)
+        def urlopen(*args: Any, **kwargs: Any) -> Any:
+            _flush()
+            return original(*args, **kwargs)
+
+        setattr(module, "urlopen", urlopen)
+        undo_opener = lambda: setattr(module, "urlopen", original)  # noqa: E731
+
+    def undo() -> None:
+        undo_opener()
+        for step in reversed(_pending.pop(name, None) or []):
+            step()
+
+    return undo
+
+
+def _flush() -> None:
+    """Route every deferred target, once proxylib can be used."""
+    if not _pending or _initializing("proxylib") or _initializing("syshttp.proxy"):
+        return
+    with _lock:
+        for name, steps in list(_pending.items()):
+            if steps is None:
+                _pending[name] = _route(name)
+
+
 class _URLErrorMap:
     """urllib sends through one proxy: the first reachable one (``Probed``),
     with none reachable reported as urllib reports a connection failure."""
 
     def __init__(self, inner: Any) -> None:
+        import proxylib
+
         self.inner = proxylib.Probed(inner)
 
     def __getitem__(self, url: str) -> Any:
         from urllib.error import URLError
 
+        import proxylib
+
         try:
             return proxylib.lookup(self.inner, url)
         except proxylib.NoReachableProxyError as exc:
             raise URLError(exc) from exc
-
-
-_ROUTES: Dict[str, Optional[Callable[[], Any]]] = {
-    "requests": _proxy.proxy_map,
-    "urllib": lambda: _URLErrorMap(_proxy.proxy_map()),
-    "httpx": _proxy.proxy_map,
-    "aiohttp": _proxy.proxy_map,
-    "pip": _proxy.proxy_map,
-}
 
 
 # ---- TLS: requests -----------------------------------------------------------
@@ -245,6 +301,8 @@ _https_context_at = 0.0
 
 def _default_https_context() -> ssl.SSLContext:
     global _https_context, _https_context_at
+    from . import tls as _tls
+
     with _lock:
         now = time.monotonic()
         if _https_context is None or now - _https_context_at > _tls.OS_CONTEXT_MAX_AGE:

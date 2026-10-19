@@ -136,6 +136,24 @@ def test_a_plain_import_is_patched_in_a_new_interpreter():
     assert (plain.stdout.strip(), patched.stdout.strip()) == ("no opinion", "http://p.example:1"), patched.stderr
 
 
+@pytest.mark.parametrize("first", ["proxylib", "syshttp.proxy", "syshttp"])
+def test_urllib_imported_by_proxylib_itself_is_routed_at_the_first_urlopen(first):
+    """proxylib's own import of urllib.request runs the hook while proxylib
+    is half built: routing waits for the first urlopen, and nothing fails."""
+    code = (
+        "import %s, urllib.request, proxylib\n"
+        "try:\n"
+        "    urllib.request.urlopen('http://127.0.0.1:1/', timeout=2)\n"
+        "except Exception:\n"
+        "    pass\n"
+        "print(type(proxylib.patching.active('urllib')).__name__)\n" % first
+    )
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("SYSHTTP_", "PROXYLIB_"))}
+    env.update(SYSHTTP_IMPORTPATCH="urllib", SYSHTTP_PROXY="http://127.0.0.1:1", SYSHTTP_SYSTEM_PROXY="0")
+    run = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=60)
+    assert run.stdout.strip() == "_URLErrorMap" and "failed" not in run.stderr, run.stderr
+
+
 def test_unpatch_restores_every_library(patched):
     autopatch.unpatch()
     assert autopatch.patched() == ()

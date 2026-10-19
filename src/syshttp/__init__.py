@@ -29,9 +29,9 @@ need only syshttp's dependencies (proxylib, sslcontext);
 """
 
 from importlib.metadata import PackageNotFoundError, version
+from typing import Any
 
 from .env import HTTPEnv
-from .proxy import NoReachableProxyError, configured_proxy, proxy_map, proxy_type
 
 __all__ = [
     "HTTPEnv",
@@ -40,6 +40,20 @@ __all__ = [
     "proxy_map",
     "proxy_type",
 ]
+
+# Read from syshttp.proxy when first asked for: importing syshttp must not
+# import proxylib, whose own import of urllib.request runs syshttp's
+# import-time patch (syshttp.autopatch) while proxylib is half built.
+_FROM_PROXY = ("NoReachableProxyError", "configured_proxy", "proxy_map", "proxy_type")
+
+
+def __getattr__(name: str) -> Any:
+    if name in _FROM_PROXY:
+        from . import proxy
+
+        return getattr(proxy, name)
+    raise AttributeError("module %r has no attribute %r" % (__name__, name))
+
 
 try:
     __version__ = version("syshttp")
