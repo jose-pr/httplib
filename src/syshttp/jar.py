@@ -5,7 +5,9 @@ by default; see :mod:`syshttp.env`), else the platform's per-user state
 directory. Cookies go under ``<root>/cookies/<host>.txt`` (Netscape format),
 tokens under ``<root>/tokens/<host>.token``.
 
-Token values are secrets: this module never logs or prints them.
+Token values are secrets: this module never logs or prints them. Files are
+written ``0o600`` (directories ``0o700``) and replaced whole, with LF line
+ends; a directory is created at the first write, not when a jar is built.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ import sys
 from pathlib import Path
 from typing import Iterable, Optional, Protocol
 
+from ._fileio import read_text, write_private
 from .cookies import CookieSpec, load_netscape, save_netscape
 from .env import HTTPEnv
 
@@ -48,7 +51,7 @@ def store_root(*, env: Optional[HTTPEnv] = None) -> Path:
     """The jar root: ``<P>_HOME``, else :func:`default_root`."""
     env = HTTPEnv() if env is None else env
     home = env.get(HOME)
-    return Path(home) if home else default_root(env=env)
+    return Path(home).expanduser() if home else default_root(env=env)
 
 
 class CookieJar(Protocol):
@@ -67,7 +70,6 @@ class FileCookieJar:
     def __init__(self, root: "Path | None" = None, *, env: Optional[HTTPEnv] = None):
         self.root = Path(root) if root is not None else store_root(env=env)
         self.dir = self.root / "cookies"
-        self.dir.mkdir(parents=True, exist_ok=True)
 
     def _path(self, key: str) -> Path:
         return self.dir / ("%s.txt" % safe_name(key))
@@ -89,17 +91,16 @@ class FileTokenJar:
     def __init__(self, root: "Path | None" = None, *, env: Optional[HTTPEnv] = None):
         self.root = Path(root) if root is not None else store_root(env=env)
         self.dir = self.root / "tokens"
-        self.dir.mkdir(parents=True, exist_ok=True)
 
     def _path(self, key: str) -> Path:
         return self.dir / ("%s.token" % safe_name(key))
 
     def __getitem__(self, key: str) -> str:
         # Never logs the value read (secret).
-        return self._path(key).read_text(encoding="utf-8").strip()
+        return read_text(self._path(key)).strip()
 
     def __setitem__(self, key: str, value: str) -> None:
-        self._path(key).write_text(value.strip() + "\n", encoding="utf-8")
+        write_private(self._path(key), (value.strip() + "\n").encode("utf-8"))
 
     def get(self, key: str, default=None):
         try:

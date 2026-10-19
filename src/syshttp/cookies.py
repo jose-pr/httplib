@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Protocol, Tuple
 from urllib.parse import urlparse
 
+from ._fileio import read_text, write_private
 from ._parse import ascii_int, http_date
 
 if TYPE_CHECKING:  # requests is optional at runtime: types only
@@ -56,10 +57,12 @@ HTTP_ONLY_PREFIX = "#HttpOnly_"
 
 
 def load_netscape(path: Path) -> List[CookieSpec]:
-    if not path.exists():
+    try:
+        text = read_text(path)
+    except FileNotFoundError:
         return []
     cookies: List[CookieSpec] = []
-    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+    for line in text.splitlines():
         # Only the leading blanks go: a trailing tab separates an empty value.
         line = line.lstrip(" ")
         # curl writes an HttpOnly cookie's domain as `#HttpOnly_<domain>`; any
@@ -373,7 +376,7 @@ def save_netscape(session_cookies: "Iterable[CookieLike]", path: Path) -> None:
         if not name:
             continue
         lines.append("%s\t%s\t%s\t%s\t%s\t%s\t%s\n" % (domain, flag, cpath, secure, expires, name, value))
-    path.write_text("".join(lines), encoding="utf-8")
+    write_private(path, "".join(lines).encode("utf-8"))
 
 
 def _forget(session: "requests.Session", cookie: CookieSpec) -> None:

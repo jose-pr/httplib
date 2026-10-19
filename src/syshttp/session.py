@@ -297,6 +297,30 @@ def new_session(
             return [cookie_key]
         return [host] if host else []
 
+    #: Per jar key, the rows the session last loaded from or wrote to the
+    #: jar: a response that changes none of them writes nothing.
+    synced: dict = {}
+
+    def _session_specs(host: str) -> Optional[list]:
+        """The session's cookies as jar rows, or ``None`` when they cannot be
+        read (a write then would empty the jar)."""
+        try:
+            return [_spec_from_cookie(c, host) for c in session.cookies]
+        except Exception:
+            return None
+
+    def _rows_for(key: str, host: str, specs: list) -> list:
+        # A host's file holds that host's cookies: by-host keys keep only the
+        # rows whose domain covers the host, so a session that talked to two
+        # hosts never copies one's cookies into the other's file. A named jar
+        # keeps everything.
+        return specs if key != host else [c for c in specs if domain_covers(c.domain, key)]
+
+    def _remember(key: str, host: str) -> None:
+        specs = _session_specs(host)
+        if specs is not None:
+            synced[key] = frozenset(_rows_for(key, host, specs))
+
     def _load_cookies_for(url: str) -> None:  # noqa: E306
         if cookie_jar is None:
             return
@@ -307,6 +331,7 @@ def new_session(
                 apply_to_session(session, cookie_jar.get(key, []))
             except Exception:
                 pass
+            _remember(key, _key_for(url))
             loaded_keys.add(key)
 
     def _save_cookies_for(url: str, response: "requests.Response") -> None:
@@ -317,22 +342,21 @@ def new_session(
         except Exception:
             pass
         host = _key_for(url)
-        try:
-            specs = [_spec_from_cookie(c, host) for c in session.cookies]
-        except Exception:
-            specs = []
+        specs = _session_specs(host)
+        if specs is None:
+            return
         for key in _cookie_keys_for(url):
             if not key:
                 continue
-            # A host's file holds that host's cookies: by-host keys keep
-            # only the rows whose domain covers the host, so a session
-            # that talked to two hosts never copies one's cookies into
-            # the other's file. A named jar keeps everything.
-            rows = specs if key != _key_for(url) else [c for c in specs if domain_covers(c.domain, key)]
+            rows = _rows_for(key, host, specs)
+            state = frozenset(rows)
+            if synced.get(key) == state:
+                continue
             try:
                 cookie_jar[key] = rows
             except Exception:
-                pass
+                continue
+            synced[key] = state
 
     _ensuring = False
 
@@ -375,6 +399,7 @@ def new_session(
     if cookie_jar is not None and cookie_key and cookie_key != "__by_host__":
         try:
             apply_to_session(session, cookie_jar.get(cookie_key, []))
+            _remember(cookie_key, "")
             loaded_keys.add(cookie_key)
         except Exception:
             pass
