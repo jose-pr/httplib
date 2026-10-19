@@ -91,6 +91,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   host. On Python 3.9, botocore pins `urllib3<1.27`, so `syshttp[session]`
   cannot share an environment with it there.
 
+- `HTTPEnv` refuses the prefix `HTTP` and any starting `HTTP_`, which it
+  accepted.
+
 ### Removed
 
 - `proxy.proxy_url`, `configured_proxy_url`, `system_proxy`,
@@ -165,6 +168,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `retry_after` returns `None` for such a value, and reads an HTTP date
   written without a zone (`asctime`) as UTC.
 - A cookie expiry beyond 400 days is cut to 400 days.
+- A hook whose `_PY` / `_CURL` target is blank is ignored instead of failing
+  every request, and `HTTPEnv.family` strips values as `get` does.
+- Hook KEYs are compared without regard to case: `HOOK_SKIP=mykey` did not
+  suppress `MYKEY`, the form Windows holds. `Hook.key` and `skipped()` are
+  upper-case.
+- A `<file>.py:callable` hook's module is loaded once per process, not on
+  every request (its module-level state was reset each time), and two files
+  with one name no longer share a module name.
 - `request_text_auto` and `request_json_auto` retry a 408 by default, as
   `new_session` does (their own list had dropped it), and close the session
   they built instead of leaking its connection pool. The five fetch helpers
@@ -211,5 +222,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - A token, or a proxy credential, containing CR, LF or NUL raises a
   `ValueError` that names the jar key or variable instead of requests'
   `InvalidHeader` carrying the whole secret.
+- The prefix `HTTP`, and any starting `HTTP_`, is refused (`ValueError`): CGI
+  exports every request header as `HTTP_*`, so a client could choose the
+  settings and the hooks (`HOOKS_<KEY>_PY` names code to import).
+- A failing hook's message names its URL as scheme, host, port and path, no
+  longer with the userinfo, query and fragment (`user:pass@`,
+  `?access_token=`).
 
 [Unreleased]: https://github.com/jose-pr/syshttp/commits/main
