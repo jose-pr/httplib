@@ -47,8 +47,16 @@ aiohttp = "syshttp.autopatch"
 
 [project.optional-dependencies]
 # requests backs syshttp.session and syshttp.fetch only, imported when a
-# session is built; importing syshttp never needs it. urllib3 comes with it.
-session = ["requests>=2.25,<3"]
+# session is built; importing syshttp never needs it.
+session = [
+    # 2.32.3 is the first requests with HTTPAdapter.build_connection_pool_key_attributes,
+    # the hook that hands a pool its ssl_context; below it ssl_context is ignored.
+    "requests>=2.32.3,<3",
+    # urllib3 1.26 raises a bare ValueError for an https IP-literal host when the
+    # pool's context checks hostnames; 2.x passes the server_hostname it needs
+    # (2.0.0 and 2.0.1 are yanked).
+    "urllib3>=2.0.2,<3",
+]
 # A JavaScript engine for PAC scripts proxylib evaluates itself (Linux without
 # libproxy); Windows and macOS evaluate PAC in the OS.
 pac = ["proxylib[pac]>=2.0.2,<3"]

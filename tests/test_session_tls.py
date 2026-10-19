@@ -23,8 +23,6 @@ def _prepared(url):
 
 def test_verify_true_https_pools_get_the_os_context():
     adapter = _adapter()
-    if not hasattr(requests.adapters.HTTPAdapter, "build_connection_pool_key_attributes"):
-        pytest.skip("requests < 2.32.2 builds its pools without this hook")
     _host, kwargs = adapter.build_connection_pool_key_attributes(_prepared("https://example.com/"), True, None)
     assert kwargs["ssl_context"] is syshttp_session.os_ssl_context()
     assert kwargs["cert_reqs"] == "CERT_REQUIRED"
@@ -36,8 +34,6 @@ def test_other_verify_values_never_share_the_os_context(verify):
     """urllib3 writes a pool's cert_reqs into its context: a verify=False pool
     sharing it would switch verification off for every other pool."""
     adapter = _adapter()
-    if not hasattr(requests.adapters.HTTPAdapter, "build_connection_pool_key_attributes"):
-        pytest.skip("requests < 2.32.2 builds its pools without this hook")
     _host, kwargs = adapter.build_connection_pool_key_attributes(_prepared("https://example.com/"), verify, None)
     assert kwargs.get("ssl_context") is not syshttp_session.os_ssl_context()
 

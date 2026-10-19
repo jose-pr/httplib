@@ -192,8 +192,6 @@ def test_requests_without_trust_env_is_left_alone(patched, target, monkeypatch, 
 
 
 def test_requests_gets_the_system_context(patched):
-    if not hasattr(requests.adapters.HTTPAdapter, "build_connection_pool_key_attributes"):
-        pytest.skip("requests < 2.32.2 builds its pools without this hook")
     adapter = requests.Session().get_adapter("https://example.com/")
     prepared = requests.Request("GET", "https://example.com/").prepare()
     _host, pool = adapter.build_connection_pool_key_attributes(prepared, True, None)

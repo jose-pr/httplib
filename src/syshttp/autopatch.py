@@ -268,7 +268,11 @@ def _tls_requests(requests: ModuleType) -> Callable[[], None]:
     @functools.wraps(original_key)
     def build_connection_pool_key_attributes(self: Any, request: Any, verify: Any, cert: Any = None) -> Any:
         host_params, pool_kwargs = original_key(self, request, verify, cert)
-        if ours(self, request.url or "", verify) and "ssl_context" not in pool_kwargs:
+        # requests 2.32.3 puts its own default context (certifi) into the pool
+        # for verify=True; later versions leave the key out.
+        requests_default = getattr(requests.adapters, "_preloaded_ssl_context", None)
+        given = pool_kwargs.get("ssl_context")
+        if ours(self, request.url or "", verify) and (given is None or given is requests_default):
             pool_kwargs["ssl_context"] = _context()
         return host_params, pool_kwargs
 
