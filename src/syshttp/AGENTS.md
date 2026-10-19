@@ -196,6 +196,9 @@ def new_session(*, user_agent: str | None = None, proxies: dict | None = None,
 - A status in `status_forcelist` that outlasts `retries` is returned as the
   response (`raise_on_status=False`), as plain requests returns it; a
   connection that never succeeds still raises.
+- Cookies, tokens, `_PY` hooks and `auth_provider` belong to `session.request`
+  (`get`, `post`, ...) only. A bare `session.send(prepared)` gets the proxy
+  decision and TLS (the adapter) and none of them.
 - `_PY` URL hooks run inside `session.request`, on the caller's URL. Requests
   a hook makes through the session do not run hooks again; the guard is per
   thread, so another thread's requests still run them.

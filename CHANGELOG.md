@@ -94,6 +94,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `HTTPEnv` refuses the prefix `HTTP` and any starting `HTTP_`, which it
   accepted.
 
+- The header says that jars, tokens, `_PY` hooks and `auth_provider` apply to
+  `session.request` and not to a bare `session.send()`, which gets the proxy
+  decision and TLS only.
+
 ### Removed
 
 - `proxy.proxy_url`, `configured_proxy_url`, `system_proxy`,
