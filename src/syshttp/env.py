@@ -15,9 +15,9 @@ import: a variable set later takes effect on the next call.
 
 ``prefix=""`` turns the package's own settings off -- only the conventional
 variables are read. It is an argument only: an empty ``SYSHTTP_PREFIX`` counts
-as unset. There is deliberately no ``HTTP`` default: CGI exports every request
-header as an ``HTTP_*`` variable, and a setting such as ``HOOKS_<KEY>_PY``
-names code to import.
+as unset. ``HTTP`` and any prefix starting ``HTTP_`` are refused: CGI exports
+every request header as an ``HTTP_*`` variable, and a setting such as
+``HOOKS_<KEY>_PY`` names code to import.
 """
 
 from __future__ import annotations
@@ -43,7 +43,13 @@ def _check_prefix(prefix: str, source: str) -> str:
         )
     # Upper case, as variable names are: Windows upper-cases os.environ's keys,
     # so a lower-case prefix would match there and nowhere else.
-    return prefix.upper()
+    prefix = prefix.upper()
+    if prefix == "HTTP" or prefix.startswith("HTTP_"):
+        raise ValueError(
+            "%s must not be HTTP or start with HTTP_, not %r: CGI exports request headers as HTTP_* variables, "
+            "so a client would choose the settings and the hooks" % (source, prefix)
+        )
+    return prefix
 
 
 class HTTPEnv:
@@ -53,7 +59,8 @@ class HTTPEnv:
     ``SYSHTTP``), a prefix such as ``"MYTOOL"``, or ``""`` for conventional
     variables only. ``environ`` -- the mapping to read, default ``os.environ``
     as it is at each lookup. A malformed prefix is a ``ValueError``: from the
-    constructor for an argument, from the first lookup for ``SYSHTTP_PREFIX``.
+    constructor for an argument, from the first lookup for ``SYSHTTP_PREFIX``;
+    so is ``HTTP`` or a prefix starting ``HTTP_``.
     """
 
     __slots__ = ("_prefix", "_environ")
@@ -98,15 +105,18 @@ class HTTPEnv:
         return None
 
     def family(self, stem: str) -> Iterator[Tuple[str, str]]:
-        """``(rest, value)`` for every set variable named ``<PREFIX>_<stem><rest>``
-        with a non-empty ``rest``, in name order; nothing when the prefix is ``""``."""
+        """``(rest, value)`` for every variable named ``<PREFIX>_<stem><rest>``
+        with a non-empty ``rest`` and a value that is not blank (stripped, as
+        :meth:`get` strips), in name order; nothing when the prefix is ``""``."""
         head = self.name(stem)
         if not head:
             return
         env = self.environ
         for name in sorted(env):
-            if name.startswith(head) and len(name) > len(head) and env[name]:
-                yield name[len(head) :], env[name]
+            if name.startswith(head) and len(name) > len(head):
+                value = (env[name] or "").strip()
+                if value:
+                    yield name[len(head) :], value
 
     def __repr__(self) -> str:
         prefix = "from %s" % PREFIX_VAR if self._prefix is None else repr(self._prefix)

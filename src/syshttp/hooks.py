@@ -44,13 +44,16 @@ would be consulted.
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import importlib.util
 import re
 import shlex
 import sys
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+from urllib.parse import urlsplit
 
 from .env import HTTPEnv
 
@@ -108,29 +111,32 @@ class Hook(object):
 
 
 def hooks_from_env(*, env: Optional[HTTPEnv] = None) -> List[Hook]:
-    """Every configured hook, in KEY order. A ``_CURL``/``_PY`` variable whose
-    KEY has no pattern is ignored (nothing to match)."""
+    """Every configured hook, in KEY order. KEYs are upper-cased (variable
+    names are compared as Windows compares them), so ``HOOKS_mykey`` and
+    ``HOOKS_MYKEY`` are one hook. A ``_CURL``/``_PY`` variable whose KEY has
+    no pattern is ignored (nothing to match), and so is a blank target."""
     env = _env(env)
-    found = dict(env.family(HOOKS))
+    found = {rest.upper(): (rest, value) for rest, value in env.family(HOOKS)}
     hooks = []
-    for key, value in found.items():
+    for key in sorted(found):
         if key.endswith((CURL_SUFFIX, PY_SUFFIX)):
             continue
-        variable = env.name(HOOKS + key) or HOOKS + key
+        rest, value = found[key]
+        variable = env.name(HOOKS + rest) or HOOKS + rest
         try:
             pattern = re.compile(value)
         except re.error as exc:
             raise ValueError("%s is not a valid regular expression: %s" % (variable, exc))
-        curl = found.get(key + CURL_SUFFIX) or None
-        py = found.get(key + PY_SUFFIX) or None
+        curl = found.get(key + CURL_SUFFIX, (None, None))[1]
+        py = found.get(key + PY_SUFFIX, (None, None))[1]
         if curl or py:
             hooks.append(Hook(key, pattern, curl, py, variable))
     return hooks
 
 
 def skipped(*, env: Optional[HTTPEnv] = None) -> "set[str]":
-    """The KEYs ``<P>_HOOK_SKIP`` (a comma list) says not to run."""
-    return {k.strip() for k in (_env(env).get(HOOK_SKIP) or "").split(",") if k.strip()}
+    """The KEYs ``<P>_HOOK_SKIP`` (a comma list) says not to run, upper-cased."""
+    return {k.strip().upper() for k in (_env(env).get(HOOK_SKIP) or "").split(",") if k.strip()}
 
 
 def matching(url: str, *, kind: Optional[str] = None, env: Optional[HTTPEnv] = None) -> List[Hook]:
@@ -139,7 +145,7 @@ def matching(url: str, *, kind: Optional[str] = None, env: Optional[HTTPEnv] = N
     skip = skipped(env=env)
     out = []
     for hook in hooks_from_env(env=env):
-        if hook.key in skip or not hook.matches(url):
+        if hook.key.upper() in skip or not hook.matches(url):
             continue
         if kind and not getattr(hook, kind):
             continue
@@ -147,20 +153,42 @@ def matching(url: str, *, kind: Optional[str] = None, env: Optional[HTTPEnv] = N
     return out
 
 
+#: File hook modules by resolved path: loaded once per process, like a
+#: ``module:attr`` import, so a hook's module-level state (a login cache)
+#: lives on between requests.
+_file_modules: Dict[str, Any] = {}
+_file_modules_lock = threading.Lock()
+
+
+def _file_module(path: Path) -> Any:
+    resolved = str(path.resolve())
+    with _file_modules_lock:
+        module = _file_modules.get(resolved)
+        if module is None:
+            digest = hashlib.sha1(resolved.encode("utf-8")).hexdigest()[:8]
+            name = "syshttp_hook_%s_%s" % (re.sub(r"\W", "_", path.stem), digest)
+            module_spec = importlib.util.spec_from_file_location(name, resolved)
+            if module_spec is None or module_spec.loader is None:
+                raise ValueError("%s is not loadable as a Python module" % resolved)
+            module = importlib.util.module_from_spec(module_spec)
+            sys.modules[name] = module
+            try:
+                module_spec.loader.exec_module(module)
+            except BaseException:
+                sys.modules.pop(name, None)
+                raise
+            _file_modules[resolved] = module
+    return module
+
+
 def load_callable(spec: str) -> "PyHook":
-    """``module:attr`` (importable) or ``<file>.py:attr``. ``attr`` may be dotted."""
+    """``module:attr`` (importable) or ``<file>.py:attr``. ``attr`` may be dotted.
+    A file is loaded once per process, by its resolved path."""
     target, sep, attr = spec.rpartition(":")
     if not sep or not target or not attr:
         raise ValueError("a hook callable is written <module or file.py>:<callable>, not %r" % spec)
     if target.endswith(".py") and Path(target).is_file():
-        path = Path(target).resolve()
-        name = "syshttp_hook_" + re.sub(r"\W", "_", path.stem)
-        module_spec = importlib.util.spec_from_file_location(name, str(path))
-        if module_spec is None or module_spec.loader is None:
-            raise ValueError("%s is not loadable as a Python module" % path)
-        module = importlib.util.module_from_spec(module_spec)
-        sys.modules[name] = module
-        module_spec.loader.exec_module(module)
+        module = _file_module(Path(target))
     else:
         module = importlib.import_module(target)
     obj: Any = module
@@ -169,6 +197,21 @@ def load_callable(spec: str) -> "PyHook":
     if not callable(obj):
         raise ValueError("%s is not callable" % spec)
     return obj
+
+
+def _bare_url(url: str) -> str:
+    """``url`` as scheme, host, port and path: no userinfo, query or fragment."""
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        if ":" in host:
+            host = "[%s]" % host
+        port = ":%d" % parts.port if parts.port else ""
+    except ValueError:
+        return "<unreadable URL>"
+    return (
+        "%s://%s%s%s" % (parts.scheme, host, port, parts.path) if parts.scheme else "%s%s%s" % (host, port, parts.path)
+    )
 
 
 def call_py_hooks(
@@ -188,10 +231,11 @@ def call_py_hooks(
             fn = load_callable(hook.py)
             result = fn(session, method, url, kwargs)
         except Exception as exc:
-            # The variable, so the failure is traceable to its declaration
-            # (the URL is the caller's; the exception carries the rest).
+            # The variable, so the failure is traceable to its declaration;
+            # the URL without its userinfo, query and fragment, which carry
+            # secrets. The hook's own exception is chained as it is.
             raise RuntimeError(
-                "%s%s (%s) failed for %s %s: %s" % (hook.variable, PY_SUFFIX, hook.py, method, url, exc)
+                "%s%s (%s) failed for %s %s: %s" % (hook.variable, PY_SUFFIX, hook.py, method, _bare_url(url), exc)
             ) from exc
         if result is not None:
             return result
@@ -235,5 +279,5 @@ def wrapper_environment(hook: Hook, url: str, entry: str, *, env: Optional[HTTPE
     url_var, key_var, curl_var, skip_var = names
     if not (url_var and key_var and curl_var and skip_var):
         return {}
-    skip = ",".join(sorted(skipped(env=env) | {hook.key}))
+    skip = ",".join(sorted(skipped(env=env) | {hook.key.upper()}))
     return {url_var: url, key_var: hook.key, curl_var: entry, skip_var: skip}

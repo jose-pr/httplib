@@ -177,3 +177,63 @@ def test_py_hooks_run_in_key_order_first_answer_wins(origin, gateway, monkeypatc
     monkeypatch.setenv("SYSHTTP_HOOKS_C_PY", "test_url_hooks:reentrant")
     resp = _session().get(origin + "/x", timeout=5)
     assert resp.text == "from-hook" and CALLS == [("GET", origin + "/x")]
+
+
+def test_a_blank_hook_target_is_ignored():
+    env = HTTPEnv(environ={"SYSHTTP_HOOKS_W": ".", "SYSHTTP_HOOKS_W_PY": "   "})
+    assert hooks.hooks_from_env(env=env) == []
+    assert hooks.call_py_hooks(None, "GET", "https://h/", {}, env=env) is None
+
+
+def test_hook_keys_are_compared_without_regard_to_case():
+    environ = {
+        "SYSHTTP_HOOKS_mykey": ".",
+        "SYSHTTP_HOOKS_mykey_PY": "test_url_hooks:record",
+        "SYSHTTP_HOOK_SKIP": "MyKey",
+    }
+    env = HTTPEnv(environ=environ)
+    found = hooks.hooks_from_env(env=env)
+    assert [h.key for h in found] == ["MYKEY"] and found[0].py == "test_url_hooks:record"
+    assert found[0].variable == "SYSHTTP_HOOKS_mykey", "a message names the variable as it is set"
+    assert hooks.skipped(env=env) == {"MYKEY"}
+    assert hooks.matching("https://h/", env=env) == []
+    del environ["SYSHTTP_HOOK_SKIP"]
+    assert [h.key for h in hooks.matching("https://h/", env=env)] == ["MYKEY"]
+    assert hooks.wrapper_environment(found[0], "https://h/", "pycurl", env=env)["SYSHTTP_HOOK_SKIP"] == "MYKEY"
+
+
+def test_a_file_hook_runs_its_module_body_once(tmp_path):
+    hits = tmp_path / "hits"
+    f = tmp_path / "counting.py"
+    f.write_text(
+        "with open(%r, 'a') as handle:\n"
+        "    handle.write('x')\n"
+        "STATE = []\n"
+        "def go(session, method, url, kwargs):\n"
+        "    STATE.append(url)\n"
+        "    return len(STATE)\n" % str(hits),
+        encoding="utf-8",
+    )
+    env = HTTPEnv(environ={"SYSHTTP_HOOKS_F": ".", "SYSHTTP_HOOKS_F_PY": str(f) + ":go"})
+    answers = [hooks.call_py_hooks(None, "GET", "https://h/%d" % i, {}, env=env) for i in range(3)]
+    assert answers == [1, 2, 3], "module state lives on between requests"
+    assert hits.read_text() == "x"
+
+
+def test_two_hook_files_with_one_stem_are_two_modules(tmp_path):
+    first, second = tmp_path / "a" / "hook.py", tmp_path / "b" / "hook.py"
+    for path, name in ((first, "first"), (second, "second")):
+        path.parent.mkdir()
+        path.write_text("def go(session, method, url, kwargs):\n    return %r\n" % name, encoding="utf-8")
+    assert hooks.load_callable(str(first) + ":go")(None, "GET", "u", {}) == "first"
+    assert hooks.load_callable(str(second) + ":go")(None, "GET", "u", {}) == "second"
+    assert hooks.load_callable(str(first) + ":go")(None, "GET", "u", {}) == "first"
+
+
+def test_a_hook_failure_names_the_url_without_userinfo_or_query():
+    env = HTTPEnv(environ={"SYSHTTP_HOOKS_B": ".", "SYSHTTP_HOOKS_B_PY": "nosuchmodule_xyz:f"})
+    with pytest.raises(RuntimeError) as caught:
+        hooks.call_py_hooks(None, "GET", "https://user:hunter2@h:8443/x?access_token=abc#frag", {}, env=env)
+    message = str(caught.value)
+    assert "SYSHTTP_HOOKS_B_PY" in message and "failed for GET https://h:8443/x:" in message
+    assert "hunter2" not in message and "access_token" not in message and "frag" not in message

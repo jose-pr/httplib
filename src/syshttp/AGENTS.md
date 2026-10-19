@@ -55,16 +55,19 @@ DEFAULT_PREFIX = "SYSHTTP"
   return `None`, no hook is read, and only conventional variables count.
   This is available only as an argument.
 - A prefix is letters, digits and single inner underscores, starting with a
-  letter. It is upper-cased. A malformed argument raises `ValueError` in the
-  constructor. A malformed `SYSHTTP_PREFIX` raises `ValueError` naming it at
-  the first lookup.
+  letter. It is upper-cased. `HTTP` and any prefix starting `HTTP_` are
+  refused (CGI exports request headers as `HTTP_*`, so a client would choose
+  the settings and the hooks); `HTTPX` is fine. A malformed or refused
+  argument raises `ValueError` in the constructor. A malformed or refused
+  `SYSHTTP_PREFIX` raises `ValueError` naming it at the first lookup.
 - `environ` isolates an instance: two `HTTPEnv`s with different prefixes or
   mappings never see each other's settings.
 - `get(setting)` returns the stripped value of `name(setting)`, or `None`
   when unset or empty. `conventional(*names)` does the same for the first set
   variable among `names`, read unprefixed.
-- `family(stem)` yields `(rest, value)` for every non-empty variable named
-  `<P>_<stem><rest>`, in name order.
+- `family(stem)` yields `(rest, value)` for every variable named
+  `<P>_<stem><rest>` whose value is not blank (stripped, as `get` strips), in
+  name order.
 
 Every function below that reads a setting takes `env: HTTPEnv | None = None`
 (keyword-only) and uses `HTTPEnv()` when it is `None`.
@@ -335,10 +338,18 @@ def wrapper_environment(hook: Hook, url: str, entry: str, *, env=None) -> dict[s
 - Hooks run in KEY order. A `_PY` hook returning non-`None` is used as the
   response and ends the chain. `kwargs` is mutable. A hook declared without
   a `_PY` or `_CURL` target is ignored, and so is a target without a
-  pattern.
+  pattern, or a blank one.
+- KEYs are compared without regard to case (`Hook.key` is upper-case, as
+  Windows holds variable names): `HOOKS_mykey` and `HOOKS_MYKEY` are one
+  hook, and `HOOK_SKIP=mykey` suppresses it.
 - `<P>_HOOK_SKIP` (a comma list of KEYs) suppresses hooks.
 - `load_callable` accepts `module:attr` or `<file>.py:attr` (`attr` may be
-  dotted).
+  dotted). A file is loaded once per process, by its resolved path, as a
+  `module` is imported once: its module-level state lives on between requests
+  and a later edit is not picked up. Two files named alike are two modules.
+- A failing `_PY` hook raises `RuntimeError` naming the variable, the target,
+  the method and the URL as scheme, host, port and path (no userinfo, query
+  or fragment); the hook's own exception is chained and not rewritten.
 - `curl_command` splits a shell-quoted command line. Backslashes are
   literal, a bare existing path is one program, and a leading `.py` runs
   under `python`.

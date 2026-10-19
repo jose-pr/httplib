@@ -141,3 +141,22 @@ def test_importing_reads_no_variable():
         env={"SYSHTTP_PREFIX": "not a prefix", "SYSTEMROOT": "C:\\Windows", "PATH": ""},
     )
     assert run.stdout.strip() == "ok", run.stderr
+
+
+@pytest.mark.parametrize("refused", ["HTTP", "http", "HTTP_X", "Http_y"])
+def test_the_http_prefix_is_refused_because_cgi_exports_request_headers_under_it(refused, monkeypatch):
+    with pytest.raises(ValueError, match="CGI"):
+        HTTPEnv(refused)
+    monkeypatch.setenv("SYSHTTP_PREFIX", refused)
+    with pytest.raises(ValueError, match="SYSHTTP_PREFIX"):
+        HTTPEnv().prefix
+
+
+def test_a_prefix_that_only_starts_with_http_is_fine():
+    assert HTTPEnv("HTTPX").name("PROXY") == "HTTPX_PROXY"
+    assert HTTPEnv("HTTP2").prefix == "HTTP2"
+
+
+def test_family_strips_values_and_skips_blank_ones():
+    env = HTTPEnv(environ={"SYSHTTP_HOOKS_A": "  x  ", "SYSHTTP_HOOKS_B": "   ", "SYSHTTP_HOOKS_C": ""})
+    assert list(env.family("HOOKS_")) == [("A", "x")]
