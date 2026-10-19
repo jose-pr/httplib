@@ -76,6 +76,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   2.0.1's `pip` target): pip's adapters route through the map unless pip is
   given `--proxy` or `--no-proxy-env`; pip keeps its own TLS context.
 
+- The jar constructors (`FileCookieJar`, `FileTokenJar`) no longer create
+  their directory; it is created at the first write.
+
 ### Removed
 
 - `proxy.proxy_url`, `configured_proxy_url`, `system_proxy`,
@@ -150,6 +153,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `retry_after` returns `None` for such a value, and reads an HTTP date
   written without a zone (`asctime`) as UTC.
 - A cookie expiry beyond 400 days is cut to 400 days.
+- Token and cookie files are replaced whole by a rename, so a reader never sees
+  an empty or half-written file and concurrent savers no longer truncate each
+  other's file.
+- `<PREFIX>_HOME=~/jars` is expanded instead of creating a directory named `~`.
+- Jar files are written with LF on Windows too, as curl writes them.
+- A session whose cookie jar cannot be read (an error while iterating
+  `session.cookies`) no longer saves an empty list over the host's cookies, and
+  writes a host's file only when its cookies changed instead of after every
+  response.
 
 ### Security
 
@@ -160,5 +172,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `set_cookie_specs` (which curlike's `-c` uses). A public suffix is
   recognised without the Public Suffix List (a name with no dot, or a
   `co.uk`-style registry).
+- Token and cookie files are created `0600`, and the directories this library
+  creates `0700`, instead of world-readable under a usual umask.
 
 [Unreleased]: https://github.com/jose-pr/syshttp/commits/main

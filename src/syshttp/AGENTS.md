@@ -210,13 +210,23 @@ class MemoryTokenJar(dict)
 class CookieJar(Protocol); class TokenJar(Protocol)   # __getitem__, __setitem__, get
 ```
 
-- `store_root()` returns `<P>_HOME`, else `default_root()`: a directory
-  `syshttp` under `%LOCALAPPDATA%` (Windows), `~/Library/Application Support`
-  (macOS) or `$XDG_STATE_HOME` / `~/.local/state` (elsewhere).
+- `store_root()` returns `<P>_HOME` (a leading `~` expanded), else
+  `default_root()`: a directory `syshttp` under `%LOCALAPPDATA%` (Windows),
+  `~/Library/Application Support` (macOS) or `$XDG_STATE_HOME` /
+  `~/.local/state` (elsewhere).
 - Cookies live in `<root>/cookies/<host>.txt` (Netscape), tokens in
-  `<root>/tokens/<host>.token`. The constructors create the directory.
+  `<root>/tokens/<host>.token`.
+- Both are secrets and are written as such: mode `0600` (directories this
+  library creates `0700`; an existing directory keeps its mode), replaced
+  whole by a rename so a reader sees the old file or the new one, with LF line
+  ends on every platform. `cookies.save_netscape` does the same. The
+  constructors do nothing on disk: the directory is created at the first
+  write.
 - `get()` returns the default on any read error. Token values are never
   logged.
+- A session saves a host's cookie file only when its cookies differ from
+  those last loaded or saved, and never after failing to read its own. A
+  token file is read at every request.
 
 ## Cookies (`syshttp.cookies`)
 
@@ -435,8 +445,7 @@ def patched() -> tuple[str, ...]
 - `SYSHTTP_PREFIX=MYTOOL` renames every setting. `SYSHTTP_PROXY` is then
   ignored and `MYTOOL_PROXY` is read.
 - A malformed `<P>_PROXY_TYPE` is harmless until `<P>_PROXY` is set.
-- The jar constructors create their directory. Pass `root=` to keep them out
-  of the user's state directory.
+- Pass `root=` to keep jar files out of the user's state directory.
 - A client certificate loaded into the context you pass is used for every
   https host the session talks to, redirects included. Give a session an
   identity only for hosts that should see it.
