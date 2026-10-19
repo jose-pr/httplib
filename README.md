@@ -38,13 +38,13 @@ together. Documentation: <https://jose-pr.github.io/syshttp/>.
 - **URL hooks** — `SYSHTTP_HOOKS_<KEY>=<regex>` plus `_PY=module:callable`
   runs your code before matching requests: a login, a signature, a canned
   response.
-- **The OS verifies certificates, or your own TLS context** — by default an
-  `ssl.SSLContext` whose certificates the operating system verifies
-  ([truststore](https://pypi.org/project/truststore/): CryptoAPI, the
-  Security framework), with no `certifi` bundle involved, or
-  `new_session(ssl_context=...)` for mutual TLS, a cipher list or a pinned
-  protocol version (for example a keystore identity built with
-  `sslcontext`).
+- **The system's TLS client, or your own TLS context** — by default
+  [sslcontext](https://pypi.org/project/sslcontext/)'s system context: the
+  operating system verifies certificates (CryptoAPI, the Security framework),
+  with no `certifi` bundle involved, and a server that asks for a client
+  certificate gets one from the OS store (smart cards included), chosen as a
+  browser chooses. Or `new_session(ssl_context=...)` for a given identity, a
+  cipher list or a pinned protocol version.
 - **A configured `requests.Session`** — retry with backoff, all of the above
   applied in one transport adapter.
 
@@ -59,9 +59,9 @@ pip install syshttp
 | `session` | `requests` (with `urllib3`) | `syshttp.session` and `syshttp.fetch` |
 | `pac` | a JavaScript engine for proxylib | PAC scripts proxylib evaluates itself (Linux without libproxy) |
 
-syshttp depends on proxylib (the system proxy) and, on Python 3.10+,
-truststore (the OS verifier); Python 3.9 verifies with the standard library's
-default context.
+syshttp depends on proxylib (the system proxy) and sslcontext (the system's
+TLS client: the OS verifier through truststore on Python 3.10+, OpenSSL over
+the default store on 3.9).
 
 ## Quick start
 

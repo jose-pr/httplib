@@ -11,8 +11,8 @@ Import names from their modules: `syshttp.env`, `syshttp.proxy`,
 `syshttp.hooks`, `syshttp.tls`, `syshttp.retry`, `syshttp.auth`. The root
 re-exports `HTTPEnv` and the proxy functions most callers need.
 
-`pip install syshttp` brings proxylib (the system's proxy configuration) and,
-on Python 3.10+, truststore (the OS certificate verifier). The extra `pac`
+`pip install syshttp` brings proxylib (the system's proxy configuration) and
+sslcontext (the system's TLS client; truststore on Python 3.10+). The extra `pac`
 adds a JavaScript engine for PAC scripts proxylib evaluates itself (Linux
 without libproxy). The extra `session` adds `requests` (with `urllib3`), which
 `syshttp.session` and
@@ -277,22 +277,31 @@ def wrapper_environment(hook: Hook, url: str, entry: str, *, env=None) -> dict[s
 ## TLS and retry (`syshttp.tls`, `syshttp.retry`)
 
 ```python
-def new_os_context(cafile: str | None = None, capath: str | None = None) -> ssl.SSLContext
+def new_os_context(cafile: str | None = None, capath: str | None = None, *,
+                   client_certificates: bool = True) -> ssl.SSLContext
 def os_ssl_context() -> ssl.SSLContext
 OS_CONTEXT_MAX_AGE = 60
 TRANSIENT_STATUSES = (408, 429, 500, 502, 503, 504)
 def retry_after(headers: Iterable[tuple[str, str]], now: float | None = None) -> float | None
 ```
 
-- `new_os_context()` without `cafile`/`capath` is a `truststore.SSLContext`
-  on Python 3.10+: the operating system verifies the chain (CryptoAPI on
-  Windows, the Security framework on macOS, OpenSSL over the system store
-  elsewhere), so OpenSSL's CRL flags have no effect on it. On 3.9 it is
-  `ssl.create_default_context()`. With `cafile`/`capath` it is a plain `ssl`
-  context trusting only them.
+- `new_os_context()` without `cafile`/`capath` is
+  `sslcontext.system_context()`. On Python 3.10+ it is a
+  `truststore.SSLContext`: the operating system verifies the chain
+  (CryptoAPI on Windows, the Security framework on macOS, OpenSSL over the
+  system store elsewhere), so OpenSSL's CRL flags have no effect on it. On
+  3.9 OpenSSL verifies over the default store. A server that asks for a
+  client certificate gets one from the OS store (the Windows Personal store
+  and smart cards, the macOS keychains, the default PKCS#11 module), chosen
+  as a browser chooses (the remembered choice, the Edge/Chrome
+  `AutoSelectCertificateForUrls` policy, the only candidate), or none.
+  `client_certificates=False` never offers one: pass it before loading a
+  certificate of your own, which a store certificate would otherwise
+  replace. With `cafile`/`capath` it is a plain `ssl` context trusting only
+  them, offering no store certificate.
 - `os_ssl_context()` is shared for `OS_CONTEXT_MAX_AGE` seconds, because
   urllib3 pools by context object. Never load a client certificate into it;
-  use `new_os_context()`.
+  use `new_os_context(client_certificates=False)`.
 - `retry_after` reads a number of seconds or an HTTP date. It returns
   `None` when the header is absent or unreadable.
 
