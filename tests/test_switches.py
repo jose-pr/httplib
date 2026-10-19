@@ -72,7 +72,7 @@ def test_syshttp_type_checks_clean():
             ]
         )
     except AssertionError as exc:
-        # mypy itself failing, not a finding: the newest types-requests names
+        # mypy itself failing, not a type error: the newest types-requests names
         # urllib3 modules (urllib3.http2) that urllib3's own floor lacks.
         pytest.skip("mypy cannot read the installed stubs against this urllib3: %s" % exc)
     assert rc == 0, out + err

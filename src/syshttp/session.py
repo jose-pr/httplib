@@ -277,7 +277,9 @@ def new_session(
     the TLS context for every https origin, used as given: its
     ``verify_mode``, trust store, client identity and ciphers decide, so
     ``verify`` must stay ``True`` beside it (anything else: ``ValueError``).
-    ``proxy_ssl_context`` -- the same for an ``https://`` proxy."""
+    ``proxy_ssl_context`` -- the same for an ``https://`` proxy. A status in
+    ``status_forcelist`` that outlasts ``retries`` is returned as a response
+    (not raised); a connection that never succeeds still raises."""
     for name, value in (("ssl_context", ssl_context), ("proxy_ssl_context", proxy_ssl_context)):
         if value is not None and not isinstance(value, ssl.SSLContext):
             raise TypeError("%s must be an ssl.SSLContext, not %s" % (name, type(value).__name__))
@@ -316,6 +318,9 @@ def new_session(
         total=retries,
         backoff_factor=backoff,
         status_forcelist=list(status_forcelist),
+        # The last response comes back when the retries run out, as plain
+        # requests returns it, instead of a RetryError.
+        raise_on_status=False,
     )
     proxymap: Any = None
     if proxies is None:
