@@ -23,7 +23,7 @@ Public surface (the package's AGENTS.md documents each name):
                                          an syshttp callable) matched on the caller's URL
   session.new_session                  — configured requests.Session
   fetch.request_text / request_json / request_with_reauth / *_auto helpers
-  autopatch                            — <P>_IMPORTPATCH: requests, urllib, httpx, aiohttp
+  autopatch                            — SYSHTTP_IMPORTPATCH: requests, urllib, httpx, aiohttp
                                          patched on import to route and verify the same way
 
 ``env``, ``proxy``, ``jar``, ``cookies``, ``tls``, ``retry`` and ``hooks``

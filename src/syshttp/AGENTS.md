@@ -15,7 +15,7 @@ re-exports `HTTPEnv` and the proxy functions most callers need.
 `pip install syshttp` brings proxylib (the system's proxy configuration),
 sslcontext (the system's TLS client; truststore on Python 3.10+) and
 importpatch (import-time patching of other HTTP clients, off unless
-`<P>_IMPORTPATCH` asks for it). The extra `pac`
+`SYSHTTP_IMPORTPATCH` asks for it). The extra `pac`
 adds a JavaScript engine for PAC scripts proxylib evaluates itself (Linux
 without libproxy). The extra `session` adds `requests` (with `urllib3`), which
 `syshttp.session` and
@@ -325,8 +325,9 @@ def retry_after(headers: Iterable[tuple[str, str]], now: float | None = None) ->
 ## Import-time patching (`syshttp.autopatch`)
 
 ```python
-SETTING = "IMPORTPATCH"   # <P>_IMPORTPATCH
+SETTING = "SYSHTTP_IMPORTPATCH"
 TARGETS = {"requests": "requests", "urllib": "urllib.request", "httpx": "httpx", "aiohttp": "aiohttp"}
+def setting_name(*, env=None) -> str
 def enabled(*, env=None) -> frozenset[str]
 def importpatch(name: str, module: ModuleType) -> None   # importpatch's entry point
 def patch(targets: Iterable[str] | None = None) -> tuple[str, ...]
@@ -334,11 +335,14 @@ def unpatch() -> None
 def patched() -> tuple[str, ...]
 ```
 
-- `<P>_IMPORTPATCH` (`SYSHTTP_IMPORTPATCH`) patches client libraries as they
-  are imported, in any program run by an interpreter of the environment:
+- `SYSHTTP_IMPORTPATCH` patches client libraries as they are imported, in
+  any program run by an interpreter of the environment. Under a prefix of a
+  tool's own the variable is `<PREFIX>_SYSHTTP_IMPORTPATCH`
+  (`SYSHTTP_PREFIX=AGENTS`: `AGENTS_SYSHTTP_IMPORTPATCH`); under the default
+  prefix or `""` it is `SYSHTTP_IMPORTPATCH` (`setting_name()`). Values:
   `1`/`true`/`yes`/`on` for every target, `0`/`false`/`no`/`off`, empty or
-  unset for none, else target names separated by commas or spaces
-  (`requests,httpx`; `urllib.request` means `urllib`). An unknown name is
+  unset for none, else target names separated by `:` (`requests:httpx`;
+  `urllib.request` means `urllib`). An unknown name is
   logged at WARNING and skipped. Read when the library is imported.
 - The mechanism is importpatch (a dependency): its `.pth` hooks imports at
   interpreter start, and syshttp's `importpatch` entry points name
@@ -396,7 +400,7 @@ def patched() -> tuple[str, ...]
 | `<P>_PROXY_AUTH_HEADER` | the header name the credential rides in | `Proxy-Authorization` |
 | `<P>_PROXY_TYPE` | `connect` or `prefix[:/endpoint]` | `connect` |
 | `<P>_HOME` | the jar root | the per-user state directory |
-| `<P>_IMPORTPATCH` | which client libraries are patched on import (`1` for all, or names) | none |
+| `SYSHTTP_IMPORTPATCH` (`<PREFIX>_SYSHTTP_IMPORTPATCH` under a prefix of its own) | which client libraries are patched on import (`1` for all, or `:`-separated names) | none |
 | `<P>_HOOKS_<KEY>` (+ `_PY`, `_CURL`) | a URL hook | none |
 | `<P>_HOOK_SKIP` | KEYs of hooks not to run, comma list | none |
 | `NO_PROXY` / `no_proxy` | hosts that go direct | none |

@@ -51,7 +51,7 @@ together. Documentation: <https://jose-pr.github.io/syshttp/>.
 - **A configured `requests.Session`** — retry with backoff, all of the above
   applied in one transport adapter.
 - **Other programs' clients, patched on import** — `SYSHTTP_IMPORTPATCH=1`
-  (or `requests,urllib,httpx,aiohttp`) makes those libraries route and
+  (or `requests:urllib:httpx:aiohttp`) makes those libraries route and
   verify the same way in any program of the environment, through
   [importpatch](https://pypi.org/project/importpatch/); what a caller sets
   itself still wins.
@@ -134,7 +134,7 @@ Every setting is `<PREFIX>_<NAME>`, with the prefix from `SYSHTTP_PREFIX`
 | `SYSHTTP_PROXY_AUTH_HEADER` | the header it is sent in (default `Proxy-Authorization`) |
 | `SYSHTTP_PROXY_TYPE` | `connect` (default) or `prefix[:/endpoint]` |
 | `SYSHTTP_HOME` | the jar directory (default: the per-user state directory) |
-| `SYSHTTP_IMPORTPATCH` | `1`, or names: the client libraries patched on import |
+| `SYSHTTP_IMPORTPATCH` | `1`, or `:`-separated names: the client libraries patched on import (`<PREFIX>_SYSHTTP_IMPORTPATCH` under a prefix of a tool's own) |
 | `SYSHTTP_HOOKS_<KEY>` | a URL hook's pattern, with `_PY` / `_CURL` targets |
 
 ## Development

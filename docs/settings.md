@@ -15,7 +15,7 @@ import.
 | `<P>_PROXY_AUTH_HEADER` | the header the credential rides in | `Proxy-Authorization` |
 | `<P>_PROXY_TYPE` | `connect`, or `prefix[:/endpoint]` for a URL-prefix gateway | `connect` |
 | `<P>_HOME` | the directory of the cookie and token jars | the per-user state directory |
-| `<P>_IMPORTPATCH` | client libraries patched as they are imported to use the system proxy and TLS: `1` for all, or names from `requests`, `urllib`, `httpx`, `aiohttp` | none |
+| `SYSHTTP_IMPORTPATCH` | client libraries patched as they are imported to use the system proxy and TLS: `1` for all, or `:`-separated names from `requests`, `urllib`, `httpx`, `aiohttp`. Not `<P>_IMPORTPATCH`: under a prefix of a tool's own it is `<P>_SYSHTTP_IMPORTPATCH`, under the default or empty prefix `SYSHTTP_IMPORTPATCH` | none |
 | `<P>_HOOKS_<KEY>` | a URL hook's pattern; `_PY` and `_CURL` name its targets | none |
 | `<P>_HOOK_SKIP` | KEYs of hooks not to run | none |
 | `NO_PROXY` / `no_proxy` | hosts that never go through the proxy | none |
