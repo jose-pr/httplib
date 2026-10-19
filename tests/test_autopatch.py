@@ -77,8 +77,8 @@ def _unreachable_system(monkeypatch, port):
         ("TRUE", set(autopatch.TARGETS)),
         ("0", set()),
         ("", set()),
-        ("requests, urllib.request httpx", {"requests", "urllib", "httpx"}),
-        ("aiohttp,,", {"aiohttp"}),
+        ("requests:urllib.request: httpx", {"requests", "urllib", "httpx"}),
+        ("aiohttp::", {"aiohttp"}),
     ],
 )
 def test_the_setting_names_the_targets(value, expected):
@@ -86,14 +86,30 @@ def test_the_setting_names_the_targets(value, expected):
 
 
 def test_an_unknown_name_is_logged_and_skipped(caplog):
-    env = HTTPEnv(environ={"SYSHTTP_IMPORTPATCH": "requests,pycurl"})
+    env = HTTPEnv(environ={"SYSHTTP_IMPORTPATCH": "requests:pycurl"})
     assert autopatch.enabled(env=env) == {"requests"}
     assert "SYSHTTP_IMPORTPATCH names 'pycurl'" in caplog.text
 
 
-def test_the_setting_follows_the_prefix():
-    env = HTTPEnv(environ={"SYSHTTP_PREFIX": "AGENTS", "AGENTS_IMPORTPATCH": "httpx", "SYSHTTP_IMPORTPATCH": "1"})
+def test_a_prefix_of_its_own_names_prefix_syshttp_importpatch():
+    env = HTTPEnv(
+        environ={
+            "SYSHTTP_PREFIX": "AGENTS",
+            "AGENTS_SYSHTTP_IMPORTPATCH": "httpx",
+            "AGENTS_IMPORTPATCH": "1",
+            "SYSHTTP_IMPORTPATCH": "1",
+        }
+    )
+    assert autopatch.setting_name(env=env) == "AGENTS_SYSHTTP_IMPORTPATCH"
     assert autopatch.enabled(env=env) == {"httpx"}
+
+
+@pytest.mark.parametrize("prefix", [None, "SYSHTTP", ""])
+def test_the_default_or_no_prefix_reads_syshttp_importpatch(prefix):
+    environ = {"SYSHTTP_IMPORTPATCH": "requests"}
+    env = HTTPEnv(environ=environ) if prefix is None else HTTPEnv(prefix=prefix, environ=environ)
+    assert autopatch.setting_name(env=env) == "SYSHTTP_IMPORTPATCH"
+    assert autopatch.enabled(env=env) == {"requests"}
 
 
 def test_the_entry_point_patches_only_what_the_setting_enables(monkeypatch):

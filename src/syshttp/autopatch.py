@@ -3,10 +3,12 @@ the way syshttp does: ``<P>_PROXY``, the ``*_PROXY`` variables, ``NO_PROXY``
 and the system's proxy configuration (:func:`syshttp.proxy.plan`), and the
 system's TLS context (:func:`syshttp.tls.os_ssl_context`).
 
-``<P>_IMPORTPATCH`` (``SYSHTTP_IMPORTPATCH`` by default) chooses the libraries:
-``1``/``true``/``yes``/``on`` for all of :data:`TARGETS`, ``0``/``false``/``no``/
-``off``, empty or unset for none, else their names separated by commas or
-spaces (``requests,httpx``; ``urllib.request`` is ``urllib``). It is read when
+``SYSHTTP_IMPORTPATCH`` chooses the libraries -- ``<PREFIX>_SYSHTTP_IMPORTPATCH``
+under a prefix of a tool's own (``SYSHTTP_PREFIX=AGENTS``:
+``AGENTS_SYSHTTP_IMPORTPATCH``): ``1``/``true``/``yes``/``on`` for all of
+:data:`TARGETS`, ``0``/``false``/``no``/``off``, empty or unset for none, else
+their names separated by ``:`` (``requests:httpx``; ``urllib.request`` is
+``urllib``). It is read when
 the library is imported: importpatch (a dependency) calls :func:`importpatch`
 for each target, through this distribution's ``importpatch`` entry points.
 :func:`patch` applies the same patches from code, whatever the setting says.
@@ -24,7 +26,6 @@ from __future__ import annotations
 import functools
 import importlib
 import logging
-import re
 import ssl
 import threading
 import time
@@ -34,12 +35,13 @@ from urllib.parse import urlsplit
 
 from . import proxy as _proxy
 from . import tls as _tls
-from .env import HTTPEnv
+from .env import DEFAULT_PREFIX, HTTPEnv
 
-__all__ = ["SETTING", "TARGETS", "enabled", "importpatch", "patch", "patched", "unpatch"]
+__all__ = ["SETTING", "TARGETS", "enabled", "importpatch", "patch", "patched", "setting_name", "unpatch"]
 
-#: The setting, as ``<P>_IMPORTPATCH``.
-SETTING = "IMPORTPATCH"
+#: The variable, under the default prefix or none; ``<PREFIX>_SYSHTTP_IMPORTPATCH``
+#: under any other prefix (:func:`setting_name`).
+SETTING = "SYSHTTP_IMPORTPATCH"
 #: The libraries that can be patched: name -> the module whose import patches it.
 TARGETS: Dict[str, str] = {
     "requests": "requests",
@@ -57,30 +59,41 @@ _lock = threading.RLock()
 _undo: Dict[str, Callable[[], None]] = {}
 
 
-def enabled(*, env: Optional[HTTPEnv] = None) -> FrozenSet[str]:
-    """The names of :data:`TARGETS` that ``<P>_IMPORTPATCH`` enables. A name
-    that is not a target is logged at WARNING and skipped."""
+def setting_name(*, env: Optional[HTTPEnv] = None) -> str:
+    """The variable that chooses the libraries: ``SYSHTTP_IMPORTPATCH`` under
+    the default prefix or the empty one, ``<PREFIX>_SYSHTTP_IMPORTPATCH``
+    under any other (``AGENTS_SYSHTTP_IMPORTPATCH``)."""
     env = HTTPEnv() if env is None else env
-    raw = (env.get(SETTING) or "").strip()
+    prefix = env.prefix
+    return SETTING if prefix in ("", DEFAULT_PREFIX) else "%s_%s" % (prefix, SETTING)
+
+
+def enabled(*, env: Optional[HTTPEnv] = None) -> FrozenSet[str]:
+    """The names of :data:`TARGETS` that :func:`setting_name` enables, ``:``
+    separated. A name that is not a target is logged at WARNING and skipped."""
+    env = HTTPEnv() if env is None else env
+    name = setting_name(env=env)
+    raw = (env.environ.get(name) or "").strip()
     if raw.lower() in _FALSE:
         return frozenset()
     if raw.lower() in _TRUE:
         return frozenset(TARGETS)
     names = set()
-    for part in re.split(r"[\s,]+", raw):
+    for part in raw.split(":"):
+        part = part.strip()
         if not part:
             continue
-        name = _BY_MODULE.get(part, part)
-        if name in TARGETS:
-            names.add(name)
+        target = _BY_MODULE.get(part, part)
+        if target in TARGETS:
+            names.add(target)
         else:
-            _log.warning("%s names %r, which is not one of %s", env.name(SETTING), part, ", ".join(TARGETS))
+            _log.warning("%s names %r, which is not one of %s", name, part, ", ".join(TARGETS))
     return frozenset(names)
 
 
 def importpatch(name: str, module: ModuleType) -> None:
     """importpatch's entry point: patch ``module``, just imported as ``name``,
-    when ``<P>_IMPORTPATCH`` enables it."""
+    when :func:`setting_name` enables it."""
     target = _BY_MODULE.get(name)
     if target is not None and target in enabled():
         _apply(target, module)
