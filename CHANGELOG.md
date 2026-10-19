@@ -79,6 +79,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - The jar constructors (`FileCookieJar`, `FileTokenJar`) no longer create
   their directory; it is created at the first write.
 
+- The `session` extra requires `requests>=2.32.3` and `urllib3>=2.0.2`
+  (was `requests>=2.25`). Below 2.32.3 a caller's `ssl_context` was silently
+  ignored, and urllib3 1.26 raises a bare `ValueError` for an https IP-literal
+  host. On Python 3.9, botocore pins `urllib3<1.27`, so `syshttp[session]`
+  cannot share an environment with it there.
+
 ### Removed
 
 - `proxy.proxy_url`, `configured_proxy_url`, `system_proxy`,
@@ -153,6 +159,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `retry_after` returns `None` for such a value, and reads an HTTP date
   written without a zone (`asctime`) as UTC.
 - A cookie expiry beyond 400 days is cut to 400 days.
+- `new_session(user_agent=...)` sets the User-Agent; the default
+  `python-requests/x` was sent whatever was given.
+- The guards that keep a hook or `auth_provider.ensure` from running again for
+  its own requests are per thread: while one thread was inside a hook, the
+  other threads' requests skipped hooks and `ensure`.
+- A request-level `verify=` (`False`, or a bundle) beside `ssl_context`, which
+  was silently ignored, raises `ValueError` as the same value does at session
+  level. `REQUESTS_CA_BUNDLE` / `CURL_CA_BUNDLE` are not a request-level
+  value.
+- The import patch replaces requests 2.32.3's own default context (a certifi
+  bundle) in a pool, as it does for the later versions that leave it out.
 - Token and cookie files are replaced whole by a rename, so a reader never sees
   an empty or half-written file and concurrent savers no longer truncate each
   other's file.
@@ -174,5 +191,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `co.uk`-style registry).
 - Token and cookie files are created `0600`, and the directories this library
   creates `0700`, instead of world-readable under a usual umask.
+- A client certificate passed as `cert=` is no longer loaded into the shared OS
+  context (or into the caller's `ssl_context`), where every later session, and
+  every other user of that context, presented it too. It gets a context of the
+  session's own; `cert=` beside `ssl_context` raises `ValueError`.
+- A URL-prefix gateway is spoken to with `proxy_ssl_context` (or the system's
+  verifier), no longer with the `ssl_context` and client certificate meant for
+  the origin.
+- A token, or a proxy credential, containing CR, LF or NUL raises a
+  `ValueError` that names the jar key or variable instead of requests'
+  `InvalidHeader` carrying the whole secret.
 
 [Unreleased]: https://github.com/jose-pr/syshttp/commits/main

@@ -18,7 +18,8 @@ sslcontext (the system's TLS client; truststore on Python 3.10+) and
 importpatch (import-time patching of other HTTP clients, off unless
 `SYSHTTP_IMPORTPATCH` asks for it). The extra `pac`
 adds a JavaScript engine for PAC scripts proxylib evaluates itself (Linux
-without libproxy). The extra `session` adds `requests` (with `urllib3`), which
+without libproxy). The extra `session` adds `requests` 2.32.3+ and `urllib3` 2.0.2+ (older
+versions ignore a caller's `ssl_context` or fail on an IP-literal host), which
 `syshttp.session` and
 `syshttp.fetch` import when a session is built. Without it, `new_session()`
 raises `ImportError` saying `pip install 'syshttp[session]'`. Every other
@@ -115,8 +116,9 @@ SYSTEM_PROXY_MAX_AGE = 60
   `host:port` is `http`). Its credential is `<P>_PROXY_AUTH`, a header value
   sent verbatim in `auth_header()` (`<P>_PROXY_AUTH_HEADER`, default
   `Proxy-Authorization`; a value with `:` or whitespace raises `ValueError`)
-  in place of the userinfo, else the userinfo as Basic. It goes to that proxy
-  only: a `CONNECT`, or a plain-http request to it, never through the tunnel.
+  in place of the userinfo, else the userinfo as Basic. A credential (this
+  or `HTTP_PROXY_AUTH`) containing a CR, LF or NUL raises `ValueError` naming
+  the variable, never the value. It goes to that proxy only: a `CONNECT`, or a plain-http request to it, never through the tunnel.
   `<P>_PROXY_TYPE=prefix[:/endpoint]` (`proxy_type()`) makes it a
   `prefix+http(s)` gateway: the request for `T` goes to
   `<proxy><endpoint>T`, the credential a header of that request.
@@ -163,21 +165,34 @@ def new_session(*, user_agent: str | None = None, proxies: dict | None = None,
 - `verify=True` verifies through `tls.os_ssl_context()` (the OS verifier)
   and names no CA file. A path, or `REQUESTS_CA_BUNDLE` / `CURL_CA_BUNDLE`,
   names a bundle. `verify=False` is left to requests.
+- A client certificate passed as `cert=` (a path, or a `(certificate, key)`
+  pair) with `verify=True` is loaded into a context of the session's own,
+  cached per file and modification time, never into the shared OS context
+  and so never into another session's. Without `ssl_context`; beside it,
+  `cert=` raises `ValueError`: load the identity into the context.
 - `ssl_context` is used as given for every https origin. Its own
   `verify_mode`, trust store, client identity (mutual TLS, including a key
   held in an OS keystore), ciphers and protocol versions decide. The session
   never changes it. Beside it, `verify` must stay `True`, or `new_session`
-  raises `ValueError`. A non-`SSLContext` raises `TypeError`.
-  `proxy_ssl_context` does the same for the TLS to an `https://` proxy.
+  raises `ValueError`; so does a request-level `verify=` (`False`, or a
+  bundle other than the one `REQUESTS_CA_BUNDLE` / `CURL_CA_BUNDLE` name),
+  which includes `fetch.request_text(verify=...)`. A non-`SSLContext` raises
+  `TypeError`. `proxy_ssl_context` does the same for the TLS to an `https://`
+  proxy and to an `https://` URL-prefix gateway: the gateway never gets
+  `ssl_context` or a client certificate meant for the origin (without
+  `proxy_ssl_context`, the system's verifier).
   The `sslcontext` package builds such contexts (keystore identities,
   PEM/PKCS#12 from memory), but any `ssl.SSLContext` works.
 - `cookies` / `tokens`: `True` uses a file jar under `jar.store_root(env=env)`
   keyed by the origin's host. A string names one key for every host. A jar
   object is used as given. A token is sent as a per-request `Authorization`:
   `Bearer <token>`, or verbatim when it already names a scheme. An explicit
-  `Authorization` header or `auth=` wins.
+  `Authorization` header or `auth=` wins. A token containing a CR, LF or NUL
+  raises `ValueError` naming the jar key, never the value.
+- `user_agent` replaces the session's `User-Agent` header.
 - `_PY` URL hooks run inside `session.request`, on the caller's URL. Requests
-  a hook makes through the session do not run hooks again.
+  a hook makes through the session do not run hooks again; the guard is per
+  thread, so another thread's requests still run them.
 - `auth_provider.ensure(session, url)` runs before each request, and its
   errors are swallowed.
 
@@ -392,7 +407,7 @@ def patched() -> tuple[str, ...]
     call, or `session.proxies`) is used as given, without syshttp's
     credential, and a session with `trust_env = False` is left to requests.
     Every `HTTPAdapter` with `verify=True` and no context of its own pool
-    manager verifies with `tls.os_ssl_context()` (requests 2.32.2+).
+    manager verifies with `tls.os_ssl_context()` (requests 2.32.3+).
   - **urllib**: proxylib's global opener (installed when the program has
     not installed its own) routes `urlopen`, through the first reachable
     entry (`Probed`; none reachable: `URLError` whose `reason` is
