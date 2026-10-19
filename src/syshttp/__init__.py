@@ -34,6 +34,7 @@ from importlib.metadata import PackageNotFoundError, version
 
 from .env import HTTPEnv
 from .proxy import (
+    NoReachableProxyError,
     prefix_url,
     proxies_from_env,
     proxy_authorization,
@@ -46,6 +47,7 @@ from .proxy import (
 
 __all__ = [
     "HTTPEnv",
+    "NoReachableProxyError",
     "prefix_url",
     "proxies_from_env",
     "proxy_authorization",

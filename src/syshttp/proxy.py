@@ -12,7 +12,10 @@ environment's convention: ``HTTPS_PROXY`` -> ``HTTP_PROXY`` -> ``ALL_PROXY``
 URL being requested (:func:`system_proxy`, through proxylib: WinHTTP on
 Windows, CFNetwork on macOS, libproxy or the desktop's settings elsewhere --
 manual proxies, PAC scripts and WPAD alike). ``<P>_SYSTEM_PROXY=0`` turns that
-last source off. A system proxy is always spoken to as ``connect``.
+last source off. A system proxy is always spoken to as ``connect``. Its answer
+is a list (``PROXY a; PROXY b; DIRECT``): the first proxy that accepts a
+connection is used, DIRECT once reached is direct, and a list with no
+reachable proxy and no DIRECT raises :class:`NoReachableProxyError`.
 
 **Credentials.** An authenticating proxy is the normal case behind a corporate
 gateway, and a proxy that is configured but not authenticated to is worse than
@@ -53,7 +56,7 @@ import base64
 import logging
 import threading
 import time
-from typing import Any, Optional, Tuple
+from typing import Any, Dict, Iterable, Optional, Tuple
 from urllib.parse import unquote, urlsplit, urlunsplit
 
 # The stdlib's own NO_PROXY matcher (what urllib and requests use); absent
@@ -79,6 +82,12 @@ SYSTEM_PROXY = "SYSTEM_PROXY"
 #: How long the system's proxy configuration is reused (seconds) before it is
 #: read again, and how long one URL's answer is kept.
 SYSTEM_PROXY_MAX_AGE = 60
+#: How long (seconds) the proxy picked from one of the system's lists is reused
+#: before the list is probed again. proxylib skips a proxy that did not answer
+#: for as long.
+PROBE_MAX_AGE = 30
+#: How long (seconds) each proxy of the list is given to accept a connection.
+PROBE_TIMEOUT = 5.0
 
 _log = logging.getLogger(__name__)
 _TRUE = ("1", "true", "yes", "on")
@@ -86,6 +95,19 @@ _FALSE = ("0", "false", "no", "off")
 _system_lock = threading.Lock()
 _system_map: Any = None
 _system_map_at = 0.0
+# The system's list as proxy URLs ("" for DIRECT) -> (monotonic time, the URL picked or None).
+_picked: "Dict[Tuple[str, ...], Tuple[float, Optional[str]]]" = {}
+
+
+class NoReachableProxyError(ConnectionError):
+    """No proxy the system's configuration names for a URL accepts a
+    connection, and its answer holds no DIRECT. ``proxies`` are the ones tried,
+    as ``host:port``."""
+
+    def __init__(self, proxies: Iterable[str]):
+        self.proxies = tuple(proxies)
+        super().__init__("no proxy the system's configuration names is reachable: %s" % ", ".join(self.proxies))
+
 
 #: The machine proxy's header value, read under any prefix.
 MACHINE_AUTH_VAR = "HTTP_PROXY_AUTH"
@@ -155,24 +177,59 @@ def system_proxy_map() -> Any:
         return _system_map
 
 
+def first_reachable(answer: "Tuple[Any, ...]") -> Any:
+    """proxylib's ``first_working_proxy``: the first proxy of ``answer`` whose
+    port accepts a TCP connection, ``None`` once a DIRECT entry is reached;
+    ``LookupError`` when neither."""
+    import proxylib
+
+    return proxylib.first_working_proxy(answer, timeout=PROBE_TIMEOUT)
+
+
+def _pick(answer: "Tuple[Any, ...]") -> Optional[str]:
+    """The URL of the proxy to use from one of the system's answers, or
+    ``None`` for DIRECT; the pick is reused for :data:`PROBE_MAX_AGE` seconds."""
+    if not answer or answer[0] is None:
+        return None
+    key = tuple("" if entry is None else entry.url for entry in answer)
+    now = time.monotonic()
+    with _system_lock:
+        found = _picked.get(key)
+    if found is not None and now - found[0] <= PROBE_MAX_AGE:
+        return found[1]
+    try:
+        chosen = first_reachable(answer)
+    except LookupError:
+        raise NoReachableProxyError(
+            "%s:%s" % (entry.host, entry.port) if entry.port else entry.host for entry in answer if entry is not None
+        ) from None
+    picked = None if chosen is None else chosen.url
+    with _system_lock:
+        _picked[key] = (now, picked)
+    return picked
+
+
 def system_proxy(url: str, *, env: Optional[HTTPEnv] = None) -> Optional[str]:
-    """The proxy the system's configuration names for ``url`` (its first
-    choice), or ``None`` for DIRECT, for no opinion, when it cannot be read,
-    or when ``<P>_SYSTEM_PROXY`` turns it off. A PAC answer's later
-    fallbacks (``PROXY a; PROXY b; DIRECT``) are not tried."""
+    """The proxy the system's configuration names for ``url``: the first of
+    its answer that accepts a connection, probed (:data:`PROBE_TIMEOUT` each)
+    and reused for :data:`PROBE_MAX_AGE` seconds. ``None`` for DIRECT (also
+    when a DIRECT entry comes before any reachable proxy), for no opinion,
+    when the configuration cannot be read, or when ``<P>_SYSTEM_PROXY`` turns
+    it off. :class:`NoReachableProxyError` when no proxy of the answer is
+    reachable and it holds no DIRECT."""
     if not system_proxy_enabled(env=env):
         return None
     mapping = system_proxy_map()
     if mapping is None:
         return None
     try:
-        first = next(iter(mapping[url]), None)
+        answer = tuple(mapping[url])
     except KeyError:
         return None
     except Exception as exc:
         _log.debug("the system proxy configuration failed for a URL: %s", exc)
         return None
-    return first.url if first is not None else None
+    return _pick(answer)
 
 
 def configured_proxy_url(*, env: Optional[HTTPEnv] = None) -> Optional[str]:

@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (`url=` / `target=`). `proxy.configured_proxy_url()` gives the
   environment's answer alone. The `pac` extra adds a JavaScript engine for PAC
   scripts proxylib evaluates itself (Linux without libproxy).
+- The system's answer is a list (`PROXY a; PROXY b; DIRECT`): the first proxy
+  that accepts a connection is used (proxylib's `first_working_proxy`), and a
+  DIRECT reached first is direct. No reachable proxy and no DIRECT raises
+  `proxy.NoReachableProxyError` (a `ConnectionError`, exported from the
+  root); a session raises `requests.exceptions.ProxyError` for it.
 - `new_session(ssl_context=..., proxy_ssl_context=...)` (and the same on the
   `fetch` `*_auto` helpers): a caller's `ssl.SSLContext` is used as given for
   every https origin, or for an `https://` proxy. That covers mutual TLS,

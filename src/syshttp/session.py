@@ -198,7 +198,12 @@ def _proxy_adapter_class(HTTPAdapter):
 
         def send(self, request: "requests.PreparedRequest", **kwargs: Any) -> "requests.Response":
             original = request.url or ""
-            route = self.route(original)
+            try:
+                route = self.route(original)
+            except _proxy.NoReachableProxyError as exc:
+                from requests.exceptions import ProxyError
+
+                raise ProxyError(str(exc), request=request) from exc
             if route is None:
                 if self.dynamic:
                     kwargs["proxies"] = {}  # decided: direct (trust_env must not re-add a proxy)

@@ -103,6 +103,7 @@ def test_the_system_map_is_read_once_then_renewed(monkeypatch):
     import proxylib
 
     monkeypatch.undo()  # the real system_proxy_map, without the conftest's stub
+    monkeypatch.setattr(proxy, "first_reachable", lambda answer: answer[0])  # sys:3128 is not probed
     calls = []
 
     def fake_system_proxy(provider):
@@ -193,3 +194,84 @@ def test_the_credential_reaches_a_proxy_named_in_upper_case(monkeypatch):
     finally:
         p.shutdown()
         p.server_close()
+
+
+# The real probe, before conftest stubs it for every other test.
+_REAL_FIRST_REACHABLE = proxy.first_reachable
+
+
+@pytest.fixture()
+def probing(monkeypatch):
+    """The system answers a list of loopback proxies; proxylib really probes
+    them. ``live`` listens, ``dead`` refuses."""
+    import socket
+
+    import proxylib
+
+    proxylib.netutils.clear_circuit_breaker()
+    monkeypatch.setattr(proxy, "first_reachable", _REAL_FIRST_REACHABLE)
+    live = socket.socket()
+    live.bind(("127.0.0.1", 0))
+    live.listen(8)
+    closed = socket.socket()
+    closed.bind(("127.0.0.1", 0))
+    dead = closed.getsockname()[1]
+    closed.close()
+    answers = {}
+
+    class _Map:
+        def __getitem__(self, url):
+            return proxylib.SimpleProxyMap(answers["now"])[url]
+
+    monkeypatch.setattr(proxy, "system_proxy_map", lambda: _Map())
+    for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    try:
+        yield answers, live.getsockname()[1], dead
+    finally:
+        live.close()
+        proxylib.netutils.clear_circuit_breaker()
+
+
+def test_the_first_reachable_proxy_of_the_systems_list_is_used(probing):
+    answers, live, dead = probing
+    answers["now"] = "PROXY 127.0.0.1:%d; PROXY 127.0.0.1:%d" % (dead, live)
+    assert proxy.system_proxy("http://a.example/") == "http://127.0.0.1:%d" % live
+
+
+def test_direct_in_the_list_is_direct_when_no_proxy_answers(probing):
+    answers, _live, dead = probing
+    answers["now"] = "PROXY 127.0.0.1:%d; DIRECT" % dead
+    assert proxy.system_proxy("http://a.example/") is None
+
+
+def test_no_reachable_proxy_and_no_direct_is_an_error(probing):
+    answers, _live, dead = probing
+    answers["now"] = "PROXY 127.0.0.1:%d" % dead
+    with pytest.raises(proxy.NoReachableProxyError) as caught:
+        proxy.plan(url="http://a.example/")
+    assert caught.value.proxies == ("127.0.0.1:%d" % dead,)
+    assert isinstance(caught.value, ConnectionError)
+
+
+def test_the_pick_is_reused_then_probed_again(probing, monkeypatch):
+    answers, live, _dead = probing
+    answers["now"] = "PROXY 127.0.0.1:%d" % live
+    probes = []
+    monkeypatch.setattr(proxy, "first_reachable", lambda answer: probes.append(answer) or answer[0])
+    proxy.system_proxy("http://a.example/")
+    proxy.system_proxy("http://b.example/")
+    assert len(probes) == 1, "one list, probed once"
+    monkeypatch.setattr(proxy.time, "monotonic", lambda: 10.0**9)
+    proxy.system_proxy("http://a.example/")
+    assert len(probes) == 2, "probed again after PROBE_MAX_AGE"
+
+
+def test_a_session_reports_no_reachable_proxy_as_a_proxy_error(probing):
+    requests = pytest.importorskip("requests")
+    from syshttp.session import new_session
+
+    answers, _live, dead = probing
+    answers["now"] = "PROXY 127.0.0.1:%d" % dead
+    with pytest.raises(requests.exceptions.ProxyError, match="127.0.0.1:%d" % dead):
+        new_session(retries=0).get("http://a.example/", timeout=5)
