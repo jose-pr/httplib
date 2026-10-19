@@ -72,6 +72,9 @@ def configured_proxy_url(*, env=None) -> str | None
 def system_proxy(url: str, *, env=None) -> str | None
 def system_proxy_enabled(*, env=None) -> bool
 def system_proxy_map() -> proxylib.ProxyMap | None
+def first_reachable(answer: tuple) -> proxylib.Proxy | None   # proxylib.first_working_proxy
+PROBE_MAX_AGE = 30; PROBE_TIMEOUT = 5.0
+class NoReachableProxyError(ConnectionError):  # proxies: tuple[str, ...] (host:port)
 def configured_authorization(*, env=None) -> str | None
 def proxy_authorization(url: str | None = None, *, configured: bool = True, env=None, target: str | None = None) -> str | None
 def resolve(url: str | None = None, *, configured: bool = True, env=None, target: str | None = None) -> tuple[str, str | None] | None
@@ -95,13 +98,22 @@ class ProxyPlan:  # proxy, authorization, endpoint, no_proxy, auth_header; bypas
   `all_proxy`. A bare `host:port` gets `http://`. Userinfo is kept as
   configured. `proxy_url(url=...)` returns that, else `system_proxy(url)`.
   Without `url` the system is not consulted: its answer depends on the URL.
-- `system_proxy(url)` is the system's first choice for `url`: WinHTTP on
-  Windows, CFNetwork on macOS, libproxy or the desktop's settings elsewhere,
-  PAC scripts and WPAD included (proxylib's OS engine). It returns `None` for
-  DIRECT, for no opinion, when the configuration cannot be read (logged at
-  DEBUG, never raised), and when `<P>_SYSTEM_PROXY` is off. Later PAC
-  fallbacks (`PROXY a; PROXY b`) are not tried. `system_proxy_map()` is the
-  configuration, read once per `SYSTEM_PROXY_MAX_AGE` (60) seconds.
+- `system_proxy(url)` is the proxy the system's configuration names for
+  `url`: WinHTTP on Windows, CFNetwork on macOS, libproxy or the desktop's
+  settings elsewhere, PAC scripts and WPAD included (proxylib's OS engine).
+  Its answer is a list (`PROXY a; PROXY b; DIRECT`): the first proxy whose
+  port accepts a TCP connection is used (`first_reachable`, proxylib's
+  `first_working_proxy`: `PROBE_TIMEOUT` seconds each, a proxy that did not
+  answer skipped for 30 s process-wide), and the pick is reused for
+  `PROBE_MAX_AGE` seconds per list. A DIRECT entry reached first is direct.
+  No reachable proxy and no DIRECT raises `NoReachableProxyError` (a
+  `ConnectionError`; also from `proxy_url()` and `plan()`), naming the proxies
+  as `host:port`. It returns `None` for DIRECT, for no opinion, when the
+  configuration cannot be read (logged at DEBUG, never raised), and when
+  `<P>_SYSTEM_PROXY` is off. A probe checks only that the port answers: a
+  proxy that accepts and then fails is not replaced by the next.
+  `system_proxy_map()` is the configuration, read once per
+  `SYSTEM_PROXY_MAX_AGE` (60) seconds.
   `system_proxy_enabled()` reads `<P>_SYSTEM_PROXY` (`1`/`true`/`yes`/`on`
   or their opposites; another value raises `ValueError` naming it).
 - The credential is the header value, sent verbatim. Order:
@@ -149,7 +161,9 @@ def new_session(*, user_agent: str | None = None, proxies: dict | None = None,
   bare `session.send()` and every redirect hop: `proxy.plan(url=<that URL>,
   env=env)`, so the environment is read as it is then and the system's answer
   follows a PAC script host by host. `adapter.route(url)` returns that
-  decision (`session.get_adapter(url).route(url)`). A `NO_PROXY`
+  decision (`session.get_adapter(url).route(url)`). When no proxy of the
+  system's list answers and it holds no DIRECT, the request raises
+  `requests.exceptions.ProxyError` (caused by `NoReachableProxyError`). A `NO_PROXY`
   host goes direct without the credential. A `connect` proxy is passed
   explicitly per request, so `HTTP_PROXY` cannot win through `trust_env`.
   The credential goes on the plain-http request and the https `CONNECT`,

@@ -20,7 +20,10 @@ together. Documentation: <https://jose-pr.github.io/syshttp/>.
 - **The system's proxy, by default** — with no proxy variable set, the
   system's configuration decides per URL: WinHTTP on Windows, CFNetwork on
   macOS, libproxy or the desktop's settings elsewhere, PAC and WPAD included
-  (through [proxylib](https://pypi.org/project/proxylib/)).
+  (through [proxylib](https://pypi.org/project/proxylib/)). Of a list
+  (`PROXY a; PROXY b; DIRECT`) the first proxy that answers is used; with no
+  proxy answering and no DIRECT the request fails (`NoReachableProxyError`)
+  rather than going direct.
 - **Proxies with credentials** — a proxy URL from `SYSHTTP_PROXY` or the
   usual `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`. The `Proxy-Authorization`
   value is sent verbatim, so any scheme works (`Basic`, `Bearer`,
