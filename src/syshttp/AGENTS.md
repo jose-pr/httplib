@@ -8,11 +8,14 @@ self-contained. Development documentation lives with the source at
 
 Import names from their modules: `syshttp.env`, `syshttp.proxy`,
 `syshttp.session`, `syshttp.fetch`, `syshttp.jar`, `syshttp.cookies`,
-`syshttp.hooks`, `syshttp.tls`, `syshttp.retry`, `syshttp.auth`. The root
+`syshttp.hooks`, `syshttp.tls`, `syshttp.retry`, `syshttp.auth`,
+`syshttp.autopatch`. The root
 re-exports `HTTPEnv` and the proxy functions most callers need.
 
-`pip install syshttp` brings proxylib (the system's proxy configuration) and
-sslcontext (the system's TLS client; truststore on Python 3.10+). The extra `pac`
+`pip install syshttp` brings proxylib (the system's proxy configuration),
+sslcontext (the system's TLS client; truststore on Python 3.10+) and
+importpatch (import-time patching of other HTTP clients, off unless
+`<P>_IMPORTPATCH` asks for it). The extra `pac`
 adds a JavaScript engine for PAC scripts proxylib evaluates itself (Linux
 without libproxy). The extra `session` adds `requests` (with `urllib3`), which
 `syshttp.session` and
@@ -319,6 +322,69 @@ def retry_after(headers: Iterable[tuple[str, str]], now: float | None = None) ->
 - `retry_after` reads a number of seconds or an HTTP date. It returns
   `None` when the header is absent or unreadable.
 
+## Import-time patching (`syshttp.autopatch`)
+
+```python
+SETTING = "IMPORTPATCH"   # <P>_IMPORTPATCH
+TARGETS = {"requests": "requests", "urllib": "urllib.request", "httpx": "httpx", "aiohttp": "aiohttp"}
+def enabled(*, env=None) -> frozenset[str]
+def importpatch(name: str, module: ModuleType) -> None   # importpatch's entry point
+def patch(targets: Iterable[str] | None = None) -> tuple[str, ...]
+def unpatch() -> None
+def patched() -> tuple[str, ...]
+```
+
+- `<P>_IMPORTPATCH` (`SYSHTTP_IMPORTPATCH`) patches client libraries as they
+  are imported, in any program run by an interpreter of the environment:
+  `1`/`true`/`yes`/`on` for every target, `0`/`false`/`no`/`off`, empty or
+  unset for none, else target names separated by commas or spaces
+  (`requests,httpx`; `urllib.request` means `urllib`). An unknown name is
+  logged at WARNING and skipped. Read when the library is imported.
+- The mechanism is importpatch (a dependency): its `.pth` hooks imports at
+  interpreter start, and syshttp's `importpatch` entry points name
+  `syshttp.autopatch` for `requests`, `urllib.request`, `httpx` and
+  `aiohttp`. `IMPORTPATCH_DISABLE=1` turns every importpatch hook off.
+  `patch(targets=None)` applies the patches from code whatever the setting
+  says (every installed target by default; a named one that is not installed
+  raises its `ImportError`, an unknown name `ValueError`); `unpatch()` undoes
+  them, though a client built while patched keeps what it was given.
+- What a patched library does: a request with no proxy of the caller's is
+  routed by `proxy.plan(url=...)` (`<P>_PROXY`, the `*_PROXY` variables,
+  `NO_PROXY`, then the system's first reachable proxy), credential included;
+  with verification on and no TLS argument of the caller's it is verified
+  with `tls.os_ssl_context()`. No reachable proxy raises the library's proxy
+  error.
+  - **requests**: every new `Session` mounts the dynamic `ProxyAdapter`. A
+    proxy the caller set (`proxies=`, `session.proxies`) that the
+    environment would not have picked is used as given, without syshttp's
+    credential; `session.trust_env = False` is sent as requests would.
+    `requests.exceptions.ProxyError` when no proxy is reachable.
+  - **urllib**: `urllib.request.ProxyHandler` built without a mapping (as
+    every default opener builds it) routes each request and redirect hop; one
+    built with a mapping is the standard handler. `ssl._create_default_https_context`
+    returns a system context, so `http.client` and every caller that gives no
+    context verify with it (one context of its own, shared 60 s: http.client
+    sets ALPN on it). A credential under another header than
+    `Proxy-Authorization` through an https `connect` proxy is refused
+    (`URLError`): urllib would send it to the origin. `URLError` when no proxy
+    is reachable.
+  - **httpx**: `Client` / `AsyncClient` built without `transport`, `proxy`,
+    `proxies` or `mounts` and with `trust_env` get a routing transport (one
+    inner transport per proxy); `verify` left at `True` becomes the system
+    context (a fresh one offering no store certificate when `cert=` is
+    given). The async transport decides the route on a worker thread.
+    `httpx.ProxyError` when no proxy is reachable.
+  - **aiohttp**: `ClientSession` requests without `proxy=` are routed
+    (aiohttp reads no proxy itself unless `trust_env`; that is not an
+    opt-out here), decided on the loop's executor; the credential rides in
+    `proxy_headers` for https (the CONNECT) and in the request's headers for
+    http (the request goes to the proxy). `ssl` left at `True` with no
+    `ssl_context` / `verify_ssl` / `fingerprint` becomes the system context.
+    `aiohttp.ClientConnectionError` when no proxy is reachable.
+- Not patched: urllib3 used directly, pip's vendored requests, websocket
+  libraries. proxylib 2 adds its own import patches for requests and urllib
+  (`PROXYLIB_AUTO_PATCH`, routing only); enable one of the two.
+
 ## Environment variables
 
 | Variable | Sets | Default |
@@ -330,6 +396,7 @@ def retry_after(headers: Iterable[tuple[str, str]], now: float | None = None) ->
 | `<P>_PROXY_AUTH_HEADER` | the header name the credential rides in | `Proxy-Authorization` |
 | `<P>_PROXY_TYPE` | `connect` or `prefix[:/endpoint]` | `connect` |
 | `<P>_HOME` | the jar root | the per-user state directory |
+| `<P>_IMPORTPATCH` | which client libraries are patched on import (`1` for all, or names) | none |
 | `<P>_HOOKS_<KEY>` (+ `_PY`, `_CURL`) | a URL hook | none |
 | `<P>_HOOK_SKIP` | KEYs of hooks not to run, comma list | none |
 | `NO_PROXY` / `no_proxy` | hosts that go direct | none |

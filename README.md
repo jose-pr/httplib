@@ -50,6 +50,11 @@ together. Documentation: <https://jose-pr.github.io/syshttp/>.
   cipher list or a pinned protocol version.
 - **A configured `requests.Session`** — retry with backoff, all of the above
   applied in one transport adapter.
+- **Other programs' clients, patched on import** — `SYSHTTP_IMPORTPATCH=1`
+  (or `requests,urllib,httpx,aiohttp`) makes those libraries route and
+  verify the same way in any program of the environment, through
+  [importpatch](https://pypi.org/project/importpatch/); what a caller sets
+  itself still wins.
 
 ## Installation
 
@@ -62,9 +67,10 @@ pip install syshttp
 | `session` | `requests` (with `urllib3`) | `syshttp.session` and `syshttp.fetch` |
 | `pac` | a JavaScript engine for proxylib | PAC scripts proxylib evaluates itself (Linux without libproxy) |
 
-syshttp depends on proxylib (the system proxy) and sslcontext (the system's
+syshttp depends on proxylib (the system proxy), sslcontext (the system's
 TLS client: the OS verifier through truststore on Python 3.10+, OpenSSL over
-the default store on 3.9).
+the default store on 3.9) and importpatch (its `.pth` hooks imports at
+interpreter start; nothing is patched unless `SYSHTTP_IMPORTPATCH` says so).
 
 ## Quick start
 
@@ -110,6 +116,7 @@ s = new_session(env=env)
 | `syshttp.cookies` | Netscape cookie files and curl's cookie rules |
 | `syshttp.hooks` | URL hooks declared in the environment |
 | `syshttp.tls` | the OS verifier as an `SSLContext` |
+| `syshttp.autopatch` | requests, urllib, httpx and aiohttp patched on import |
 | `syshttp.retry` | the transient statuses, `Retry-After` |
 
 ## Settings
@@ -127,6 +134,7 @@ Every setting is `<PREFIX>_<NAME>`, with the prefix from `SYSHTTP_PREFIX`
 | `SYSHTTP_PROXY_AUTH_HEADER` | the header it is sent in (default `Proxy-Authorization`) |
 | `SYSHTTP_PROXY_TYPE` | `connect` (default) or `prefix[:/endpoint]` |
 | `SYSHTTP_HOME` | the jar directory (default: the per-user state directory) |
+| `SYSHTTP_IMPORTPATCH` | `1`, or names: the client libraries patched on import |
 | `SYSHTTP_HOOKS_<KEY>` | a URL hook's pattern, with `_PY` / `_CURL` targets |
 
 ## Development
