@@ -299,3 +299,79 @@ def test_a_loaded_host_only_row_stays_on_its_host(web):
     apply_to_session(session, [CookieSpec("example.test", "/", False, None, "hostonly", "1")])
     assert _get(session, "http://example.test/") == "hostonly=1"
     assert _get(session, "http://sub.example.test/") == ""
+
+
+# -- domain_covers and merge_set_cookie_headers -----------------------------
+
+
+@pytest.mark.parametrize(
+    "domain, host, covers",
+    [
+        ("example.com", "example.com", True),
+        ("example.com", "www.example.com", False),
+        (".example.com", "www.example.com", True),
+        (".example.com", "example.com", True),
+        (".example.com", "badexample.com", False),
+        (".Example.COM", "WWW.example.com", True),
+        ("", "example.com", False),
+        (".example.com", "", False),
+    ],
+)
+def test_domain_covers(domain, host, covers):
+    from syshttp.cookies import domain_covers
+
+    assert domain_covers(domain, host) is covers
+
+
+class _Raw:
+    def __init__(self, *set_cookies):
+        self.headers = type("Headers", (), {"get_all": lambda self, name: list(set_cookies)})()
+
+
+class _Response:
+    def __init__(self, url, *set_cookies, history=()):
+        self.url, self.raw, self.history = url, _Raw(*set_cookies), list(history)
+
+
+def _session_with(*cookies):
+    import requests
+
+    session = requests.Session()
+    for name, domain in cookies:
+        session.cookies.set(name, "v", domain=domain, path="/")
+    return session
+
+
+def test_merge_deletes_a_cookie_the_server_expires_and_sets_nothing():
+    from syshttp.cookies import merge_set_cookie_headers
+
+    session = _session_with(("k", "bank.test"), ("keep", "bank.test"))
+    merge_set_cookie_headers(
+        session, _Response("http://bank.test/", "k=; Max-Age=0; Domain=bank.test; Path=/", "new=1")
+    )
+    assert sorted(c.name for c in session.cookies) == ["keep"]
+
+
+def test_merge_ignores_a_deletion_for_a_domain_the_host_does_not_own():
+    from syshttp.cookies import merge_set_cookie_headers
+
+    session = _session_with(("k", "bank.test"))
+    merge_set_cookie_headers(session, _Response("http://evil.test/", "k=; Max-Age=0; Domain=bank.test; Path=/"))
+    assert [c.name for c in session.cookies] == ["k"]
+
+
+def test_merge_reads_the_redirect_hops_too():
+    from syshttp.cookies import merge_set_cookie_headers
+
+    session = _session_with(("k", "bank.test"))
+    hop = _Response("http://bank.test/login", "k=; Max-Age=0; Path=/")
+    merge_set_cookie_headers(session, _Response("http://bank.test/home", history=[hop]))
+    assert list(session.cookies) == []
+
+
+def test_merge_without_raw_headers_does_nothing():
+    from syshttp.cookies import merge_set_cookie_headers
+
+    session = _session_with(("k", "bank.test"))
+    merge_set_cookie_headers(session, type("R", (), {"url": "http://bank.test/", "raw": None, "history": []})())
+    assert [c.name for c in session.cookies] == ["k"]

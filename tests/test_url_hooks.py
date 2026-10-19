@@ -237,3 +237,22 @@ def test_a_hook_failure_names_the_url_without_userinfo_or_query():
     message = str(caught.value)
     assert "SYSHTTP_HOOKS_B_PY" in message and "failed for GET https://h:8443/x:" in message
     assert "hunter2" not in message and "access_token" not in message and "frag" not in message
+
+
+@pytest.mark.parametrize(
+    "line, argv",
+    [
+        ("cmd fetch --", ["cmd", "fetch", "--"]),
+        ("'my tool' --flag \"a b\"", ["my tool", "--flag", "a b"]),
+        (r"C:\Tools\wrap.exe -x", [r"C:\Tools\wrap.exe", "-x"]),
+        ("cmd #notacomment", ["cmd", "#notacomment"]),
+        ("", []),
+    ],
+)
+def test_split_command_groups_quotes_and_keeps_backslashes(line, argv):
+    assert hooks.split_command(line) == argv
+
+
+def test_split_command_refuses_an_unbalanced_quote():
+    with pytest.raises(ValueError):
+        hooks.split_command("cmd 'open")

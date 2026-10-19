@@ -10,6 +10,10 @@ caller's request and URL. A token is a per-request
 already names a scheme), never a session header, so it cannot leak to another
 host; an explicit header or ``auth=`` wins.
 
+Jars, tokens, hooks and ``auth_provider`` apply to ``session.request`` (so to
+``get``, ``post``, ...), not to a bare ``session.send()``, which gets the
+adapter's routing and TLS only.
+
 URL hooks (``<P>_HOOKS_<KEY>`` + ``_PY``, see :mod:`.hooks`) run in the
 same place, on the caller's URL, before the request: a hook may log in, set
 headers in the request's kwargs, or return a response of its own. A hook
@@ -62,7 +66,7 @@ def _import_requests():
         import requests
         from requests.adapters import HTTPAdapter
         from urllib3.util.retry import Retry
-    except ImportError as exc:  # pragma: no cover - exercised via message assert
+    except ImportError as exc:
         raise ImportError("syshttp.session needs 'requests' (with urllib3): " "pip install 'syshttp[session]'") from exc
     return requests, HTTPAdapter, Retry
 
