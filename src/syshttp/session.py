@@ -32,8 +32,11 @@ actionable error if they are absent; every other module works without them.
 
 from __future__ import annotations
 
+import contextvars
+import os
 import re
 import ssl
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, Optional, Tuple, Union
 from urllib.parse import urlparse
@@ -44,7 +47,7 @@ from .cookies import _spec_from_cookie, apply_to_session, domain_covers, host_on
 from .env import HTTPEnv
 from .jar import CookieJar, FileCookieJar, FileTokenJar, TokenJar
 from .retry import TRANSIENT_STATUSES
-from .tls import OS_CONTEXT_MAX_AGE, os_ssl_context  # noqa: F401  (re-exported: session's own API)
+from .tls import OS_CONTEXT_MAX_AGE, new_os_context, os_ssl_context  # noqa: F401  (re-exported: session's own API)
 from . import proxy as _proxy
 from .warnings import disable_insecure_request_warnings
 
@@ -62,6 +65,22 @@ def _import_requests():
     except ImportError as exc:  # pragma: no cover - exercised via message assert
         raise ImportError("syshttp.session needs 'requests' (with urllib3): " "pip install 'syshttp[session]'") from exc
     return requests, HTTPAdapter, Retry
+
+
+#: The URL the caller asked for, while an adapter sends it: a request sent to
+#: another URL is the hop to a URL-prefix gateway.
+_ASKED_URL: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar("syshttp_asked_url", default=None)
+
+
+def _explicit_verify(verify: Any) -> bool:
+    """Is ``verify`` something the caller chose beyond the default: ``False``,
+    or a bundle other than the one ``REQUESTS_CA_BUNDLE`` / ``CURL_CA_BUNDLE``
+    name (requests turns ``verify=True`` into that bundle itself)."""
+    if verify is True:
+        return False
+    return not (
+        isinstance(verify, str) and verify in (os.environ.get("REQUESTS_CA_BUNDLE"), os.environ.get("CURL_CA_BUNDLE"))
+    )
 
 
 def _proxy_adapter_class():
@@ -93,6 +112,8 @@ def _proxy_adapter_class():
             # Set before HTTPAdapter.__init__, which builds the pool manager.
             self.ssl_context = ssl_context
             self.proxy_ssl_context = proxy_ssl_context
+            self._identities: "dict[Any, ssl.SSLContext]" = {}
+            self._identities_lock = threading.Lock()
             super().__init__(_proxy.proxy_map(env=env) if proxymap is None else proxymap, **kwargs)
 
         def route(self, url: str) -> "Tuple[Any, ...]":
@@ -106,17 +127,60 @@ def _proxy_adapter_class():
             except KeyError:
                 return ()
 
+        def send(self, request, *args, **kwargs):
+            token = _ASKED_URL.set(request.url)
+            try:
+                return super().send(request, *args, **kwargs)
+            finally:
+                _ASKED_URL.reset(token)
+
+        @staticmethod
+        def _to_gateway(url: str) -> bool:
+            asked = _ASKED_URL.get()
+            return asked is not None and asked != url
+
+        def _identity_context(self, cert: Any) -> "ssl.SSLContext":
+            """A context of its own for the client certificate ``cert`` (a path,
+            or a ``(certificate, key)`` pair), cached per file and
+            modification time. urllib3 loads a pool's ``cert_file`` into the
+            context it is given, so the shared OS context must never get one."""
+            cert_file, key_file = (cert[0], cert[1]) if isinstance(cert, (tuple, list)) else (cert, None)
+            key = tuple((path, os.stat(path).st_mtime_ns) for path in (cert_file, key_file) if path)
+            with self._identities_lock:
+                context = self._identities.get(key)
+                if context is None:
+                    context = new_os_context(client_certificates=False)
+                    context.load_cert_chain(cert_file, key_file)
+                    self._identities[key] = context
+            return context
+
         def build_connection_pool_key_attributes(self, request, verify, cert=None):
             """Over https: the caller's ``ssl_context`` when there is one,
             else for ``verify=True`` the OS trust-store context, in place of
-            requests' own (a ``certifi`` bundle in 2.32-2.33). The OS context
-            only for ``verify=True`` -- urllib3 writes a pool's ``cert_reqs``
-            into the context it is given, so a ``verify=False`` pool must
-            never share it."""
+            requests' own (a ``certifi`` bundle in 2.32-2.33); with a client
+            certificate (``cert=``), a context of its own that holds it. The OS
+            context only for ``verify=True`` -- urllib3 writes a pool's
+            ``cert_reqs`` into the context it is given, so a ``verify=False``
+            pool must never share it."""
             host_params, pool_kwargs = super().build_connection_pool_key_attributes(request, verify, cert)
             if host_params.get("scheme") == "https":
-                if self.ssl_context is not None:
+                if self._to_gateway(request.url):
+                    # The gateway is not the origin: never the origin's
+                    # context or client certificate.
+                    pool_kwargs.pop("cert_file", None)
+                    pool_kwargs.pop("key_file", None)
+                    if self.proxy_ssl_context is not None:
+                        pool_kwargs["ssl_context"] = self.proxy_ssl_context
+                    elif verify is True:
+                        pool_kwargs["ssl_context"] = os_ssl_context()
+                elif self.ssl_context is not None:
                     pool_kwargs["ssl_context"] = self.ssl_context
+                    pool_kwargs.pop("cert_file", None)
+                    pool_kwargs.pop("key_file", None)
+                elif verify is True and cert:
+                    pool_kwargs["ssl_context"] = self._identity_context(cert)
+                    pool_kwargs.pop("cert_file", None)
+                    pool_kwargs.pop("key_file", None)
                 elif verify is True:
                     pool_kwargs["ssl_context"] = os_ssl_context()
             return host_params, pool_kwargs
@@ -137,12 +201,29 @@ def _proxy_adapter_class():
             raise when it is ``None``); with none, urllib3 verifies through
             the pool's OS context, or loads the OS defaults itself on older
             requests."""
+            if url.lower().startswith("https") and self._to_gateway(url):
+                context = self.proxy_ssl_context
+                if context is not None or verify is True:
+                    super().cert_verify(conn, url, False, None)  # no CA file, no origin certificate
+                    conn.cert_reqs = "CERT_REQUIRED" if context is None else context.verify_mode
+                    return
+                super().cert_verify(conn, url, verify, None)
+                return
             if self.ssl_context is not None and url.lower().startswith("https"):
-                super().cert_verify(conn, url, False, cert)  # client cert, no CA file
+                if cert:
+                    raise ValueError(
+                        "cert= and ssl_context contradict: load the client certificate into the ssl_context"
+                    )
+                if _explicit_verify(verify):
+                    raise ValueError(
+                        "verify=%r and ssl_context contradict: the context's verify_mode decides" % (verify,)
+                    )
+                super().cert_verify(conn, url, False, None)  # no CA file
                 conn.cert_reqs = self.ssl_context.verify_mode
                 return
             if verify is True and url.lower().startswith("https"):
-                super().cert_verify(conn, url, False, cert)  # client cert, no CA file
+                # The certificate, if any, is in the pool's context already.
+                super().cert_verify(conn, url, False, None)  # no CA file
                 conn.cert_reqs = "CERT_REQUIRED"
                 return
             super().cert_verify(conn, url, verify, cert)
@@ -259,7 +340,7 @@ def new_session(
     else:
         session.verify = verify
     if user_agent:
-        session.headers.setdefault("User-Agent", user_agent)
+        session.headers["User-Agent"] = user_agent
     _orig_request = session.request
     loaded_keys = set()
 
@@ -289,6 +370,9 @@ def new_session(
         if not token:
             return None
         token = str(token).strip()
+        if any(ch in token for ch in "\r\n\0"):
+            # Named, not echoed: the value is a secret.
+            raise ValueError("the token for %r contains a carriage return, line feed or NUL character" % key)
         return token if re.match(r"^[A-Za-z][\w-]*\s+\S", token) else "Bearer " + token
 
     def _cookie_keys_for(url: str) -> list:
@@ -358,31 +442,29 @@ def new_session(
                 continue
             synced[key] = state
 
-    _ensuring = False
+    #: Whether this thread is inside ``auth_provider.ensure`` or a hook: its
+    #: own requests must not start either again, other threads' must.
+    busy = threading.local()
 
     def _load_state(url: str) -> None:
         _load_cookies_for(url)
-        nonlocal _ensuring
-        if auth_provider and not _ensuring:
+        if auth_provider and not getattr(busy, "ensuring", False):
             try:
-                _ensuring = True
+                busy.ensuring = True
                 auth_provider.ensure(session, url)
             except Exception:
                 pass
             finally:
-                _ensuring = False
-
-    _in_hook = False
+                busy.ensuring = False
 
     def request(method: str, url: str, **kwargs: Any) -> "requests.Response":
-        nonlocal _in_hook
         _load_state(url)
-        if not _in_hook:
-            _in_hook = True
+        if not getattr(busy, "in_hook", False):
+            busy.in_hook = True
             try:
                 hooked = _hooks.call_py_hooks(session, method, url, kwargs, env=env)
             finally:
-                _in_hook = False
+                busy.in_hook = False
             if hooked is not None:
                 return hooked
         authorization = _authorization_for(url)

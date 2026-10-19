@@ -100,3 +100,27 @@ def test_a_ca_file_replaces_the_os_store(tmp_path):
     ctx = syshttp_tls.new_os_context(cafile=str(ca))
     assert type(ctx) is ssl.SSLContext, "a plain context trusting only the given CA"
     assert [c["subject"] for c in ctx.get_ca_certs()] == [((("commonName", "sslcontext test CA"),),)]
+
+
+def test_a_prefix_gateway_is_spoken_to_with_the_proxy_context_not_the_origins():
+    from syshttp.env import HTTPEnv
+
+    origin_ctx, proxy_ctx = ssl.create_default_context(), ssl.create_default_context()
+    env = HTTPEnv(environ={"SYSHTTP_PROXY": "https://127.0.0.1:9", "SYSHTTP_PROXY_TYPE": "prefix:/fetch/"})
+    session = syshttp_session.new_session(env=env, retries=0, ssl_context=origin_ctx, proxy_ssl_context=proxy_ctx)
+    adapter = session.get_adapter("http://x/")
+    seen = []
+    original = type(adapter).build_connection_pool_key_attributes
+
+    def spy(self, request, verify, cert=None):
+        host, pool = original(self, request, verify, cert)
+        seen.append((host["host"], pool.get("ssl_context"), pool.get("cert_file")))
+        return host, pool
+
+    type(adapter).build_connection_pool_key_attributes = spy
+    try:
+        with pytest.raises(requests.exceptions.ConnectionError):
+            session.get("http://plain-origin.example/x", timeout=2)
+    finally:
+        type(adapter).build_connection_pool_key_attributes = original
+    assert seen == [("127.0.0.1", proxy_ctx, None)]

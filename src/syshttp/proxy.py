@@ -136,6 +136,15 @@ def proxy_type(*, env: Optional[HTTPEnv] = None) -> Tuple[str, Optional[str]]:
     return "prefix", endpoint
 
 
+def _checked(variable: str, value: str) -> str:
+    """``value``, the credential read from ``variable``, unless it holds a CR,
+    LF or NUL, which would end the header. The message names the variable,
+    never the value (a secret)."""
+    if any(ch in value for ch in "\r\n\0"):
+        raise ValueError("%s must not contain a carriage return, line feed or NUL character" % variable)
+    return value
+
+
 def _with_credential(proxy: Proxy, header: str, value: str) -> Proxy:
     """``proxy`` sending ``value`` in ``header`` instead of its userinfo."""
     headers = proxy.headers
@@ -165,7 +174,9 @@ def configured_proxy(*, env: Optional[HTTPEnv] = None) -> Optional[Proxy]:
             raise ValueError("%s=prefix needs an http or https %s" % (_var(env, PROXY_TYPE), _var(env, PROXY)))
         found = Proxy("prefix+" + found.scheme, found.host, found.port, found.username, found.password, path=endpoint)
     value = env.get(PROXY_AUTH)
-    return _with_credential(found, auth_header(env=env), value) if value else found
+    if not value:
+        return found
+    return _with_credential(found, auth_header(env=env), _checked(_var(env, PROXY_AUTH), value))
 
 
 #: The conventional proxy variables, lower-cased. Not every ``*_PROXY``:
@@ -276,7 +287,7 @@ class _SettingsMap:
             machine = system_map()
         chain = proxylib.ChainProxyMap(*(m for m in (machine, proxylib.SimpleProxyMap()) if m is not None))
         value = env.conventional(MACHINE_AUTH_VAR)
-        return _Credential(chain, value) if value else chain
+        return _Credential(chain, _checked(MACHINE_AUTH_VAR, value)) if value else chain
 
     def _no_proxy(self, env: HTTPEnv) -> Optional[str]:
         return self.noproxy if self.noproxy is not None else env.conventional("NO_PROXY", "no_proxy")

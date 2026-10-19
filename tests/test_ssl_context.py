@@ -104,3 +104,77 @@ def test_an_https_proxy_is_spoken_to_with_the_proxy_context():
     adapter = new_session(proxy_ssl_context=proxy_ctx).get_adapter("https://h/")
     assert adapter.proxy_manager_for("https://proxy.example:8443").proxy_ssl_context is proxy_ctx
     assert getattr(adapter.proxy_manager_for("http://proxy.example:3128"), "proxy_ssl_context", None) is None
+
+
+# -- client certificates and per-request verify -----------------------------
+
+
+@pytest.fixture()
+def trusting_os_context(monkeypatch):
+    """The shared OS context, and the one built for a ``cert=``, replaced by
+    plain contexts that trust the test CA (the real ones cannot, and on 3.10+
+    the OS verifies). ``loaded`` records every context a certificate chain is
+    loaded into."""
+    from syshttp import session as session_module
+    from syshttp import tls
+
+    loaded = []
+    real = ssl.SSLContext.load_cert_chain
+
+    def spy(self, *args, **kwargs):
+        loaded.append(self)
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(ssl.SSLContext, "load_cert_chain", spy)
+    shared = _client(identity=False)
+    loaded.clear()
+    monkeypatch.setattr(tls, "_os_context", shared)
+    monkeypatch.setattr(tls, "_os_context_at", __import__("time").monotonic())
+    monkeypatch.setattr(session_module, "new_os_context", lambda *a, **k: _client(identity=False), raising=False)
+    return shared, loaded
+
+
+CERT = (str(DATA / "client-rsa.pem"), str(DATA / "client-rsa.key"))
+
+
+def test_a_cert_argument_never_reaches_the_shared_context(mtls_server, trusting_os_context):
+    import requests
+
+    shared, loaded = trusting_os_context
+    resp = new_session(retries=0).get(mtls_server, cert=CERT, timeout=5)
+    assert resp.text.split()[0] == "client-rsa"
+    assert shared not in loaded, "the certificate went into the context every session shares"
+    with pytest.raises(requests.exceptions.RequestException):
+        new_session(retries=0).get(mtls_server, timeout=5)
+
+
+def test_a_cert_argument_beside_the_callers_context_is_refused(mtls_server):
+    import requests
+
+    ctx = _client(identity=False)
+    session = new_session(retries=0, ssl_context=ctx)
+    with pytest.raises(ValueError, match="load the client certificate into the ssl_context"):
+        session.get(mtls_server, cert=CERT, timeout=5)
+    with pytest.raises(requests.exceptions.RequestException):
+        new_session(retries=0, ssl_context=ctx).get(mtls_server, timeout=5)
+
+
+@pytest.mark.parametrize("verify", [False, str(DATA / "ca.pem")])
+def test_a_per_request_verify_beside_the_callers_context_is_refused(mtls_server, verify):
+    session = new_session(retries=0, ssl_context=_client())
+    with pytest.raises(ValueError, match="ssl_context"):
+        session.get(mtls_server, verify=verify, timeout=5)
+
+
+def test_a_bundle_from_the_environment_is_not_a_per_request_verify(mtls_server, monkeypatch):
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(DATA / "ca.pem"))
+    resp = new_session(retries=0, ssl_context=_client()).get(mtls_server, timeout=5)
+    assert resp.status_code == 200
+
+
+def test_the_fetch_helpers_refuse_a_verify_beside_the_callers_context(mtls_server):
+    from syshttp.fetch import request_text
+
+    session = new_session(retries=0, ssl_context=_client())
+    with pytest.raises(ValueError, match="ssl_context"):
+        request_text(session, "GET", mtls_server, verify=False)
