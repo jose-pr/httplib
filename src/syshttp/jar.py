@@ -76,18 +76,7 @@ class FileCookieJar:
         return load_netscape(self._path(key))
 
     def __setitem__(self, key: str, value: Iterable[CookieSpec]) -> None:
-        path = self._path(key)
-
-        class _C:
-            def __init__(self, c: CookieSpec):
-                self.domain = c.domain
-                self.path = c.path
-                self.secure = c.secure
-                self.expires = c.expires
-                self.name = c.name
-                self.value = c.value
-
-        save_netscape([_C(c) for c in value], path)
+        save_netscape(value, self._path(key))
 
     def get(self, key: str, default=None):
         try:

@@ -40,7 +40,7 @@ from urllib.parse import urlparse
 
 from . import hooks as _hooks
 from .auth import AuthProvider
-from .cookies import CookieSpec, apply_to_session, domain_covers, merge_set_cookie_headers
+from .cookies import _spec_from_cookie, apply_to_session, domain_covers, host_only_policy, merge_set_cookie_headers
 from .env import HTTPEnv
 from .jar import CookieJar, FileCookieJar, FileTokenJar, TokenJar
 from .retry import TRANSIENT_STATUSES
@@ -150,6 +150,31 @@ def _proxy_adapter_class():
     return ProxyAdapter
 
 
+def _session_class():
+    """``requests.Session`` with the cookie header built under
+    :func:`host_only_policy`. requests builds each request's header from a
+    fresh merged jar with the default policy, so a policy set on
+    ``session.cookies`` alone never reaches it."""
+    import requests
+
+    class Session(requests.Session):  # type: ignore[misc,valid-type]
+        def prepare_request(self, request):
+            prepared = super().prepare_request(request)
+            jar = getattr(prepared, "_cookies", None)
+            if jar is None or not hasattr(jar, "set_policy"):
+                return prepared
+            jar.set_policy(host_only_policy())
+            own = [h for h in (request.headers, self.headers) if h]
+            kept = next((v for h in own for k, v in h.items() if str(k).lower() == "cookie"), None)
+            prepared.headers.pop("Cookie", None)
+            if kept is not None:
+                prepared.headers["Cookie"] = kept
+            prepared.prepare_cookies(jar)
+            return prepared
+
+    return Session
+
+
 def new_session(
     *,
     user_agent: Optional[str] = None,
@@ -179,10 +204,10 @@ def new_session(
         raise ValueError("verify=%r and ssl_context contradict: the context's verify_mode decides" % (verify,))
     env = HTTPEnv() if env is None else env
     disable_insecure_request_warnings()
-    # Not `requests`: that name is the TYPE_CHECKING import the annotations
-    # below refer to, and a local of the same name would shadow it.
-    requests_mod, _, Retry = _import_requests()
-    session = requests_mod.Session()
+    # First, for its actionable ImportError when requests is absent.
+    _, _, Retry = _import_requests()
+    session = _session_class()()
+    session.cookies.set_policy(host_only_policy())
     cookie_jar: Optional[CookieJar] = None
     cookie_key: Optional[str] = None
     if cookies is True:
@@ -291,19 +316,9 @@ def new_session(
             merge_set_cookie_headers(session, response)
         except Exception:
             pass
-        specs = []
+        host = _key_for(url)
         try:
-            for c in session.cookies:
-                specs.append(
-                    CookieSpec(
-                        domain=getattr(c, "domain", "") or "",
-                        path=getattr(c, "path", "/") or "/",
-                        secure=bool(getattr(c, "secure", False)),
-                        expires=getattr(c, "expires", None),
-                        name=getattr(c, "name", ""),
-                        value=getattr(c, "value", ""),
-                    )
-                )
+            specs = [_spec_from_cookie(c, host) for c in session.cookies]
         except Exception:
             specs = []
         for key in _cookie_keys_for(url):
