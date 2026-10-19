@@ -104,7 +104,8 @@ SYSTEM_PROXY_MAX_AGE = 60
   4. Else DIRECT.
 - `proxy` (curl's `-x`) replaces 2 and 3 with that proxy, a plain one whose
   credential is only its userinfo; `""` is DIRECT. `noproxy` (`--noproxy`)
-  replaces `NO_PROXY`. `proxy_user` (`-U user:password`) becomes the
+  replaces `NO_PROXY`, the variables' own included; listing `<-loopback>`
+  turns proxylib's implicit loopback bypass off, as curl has none. `proxy_user` (`-U user:password`) becomes the
   credential of whichever proxy answers.
 - A malformed `<P>_PROXY`, `<P>_PROXY_TYPE` or `<P>_PROXY_AUTH_HEADER`
   raises `ValueError` (proxylib's `ProxyParseError` for a URL) at lookup,

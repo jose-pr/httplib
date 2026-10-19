@@ -42,6 +42,14 @@ def test_lowercase_wins_over_uppercase():
     assert _urls("https://example.com/", environ) == ["http://lower:9"]
 
 
+def test_noproxy_replaces_the_variables_own_no_proxy():
+    environ = {"HTTP_PROXY": "http://p:1", "NO_PROXY": "q.example"}
+    assert _urls("http://q.example/", environ) == [None]
+    assert _urls("http://q.example/", environ, noproxy="r.example") == ["http://p:1"]
+    assert _urls("http://127.0.0.1:5/", environ) == [None], "loopback: proxylib's implicit bypass"
+    assert _urls("http://127.0.0.1:5/", environ, noproxy="<-loopback>") == ["http://p:1"]
+
+
 def test_direct_when_nothing_is_set():
     assert _urls("https://example.com/", {}) == [None]
 

@@ -268,12 +268,10 @@ class _SettingsMap:
         if configured is not None:
             return proxylib.SimpleProxyMap(configured)
         environ: Mapping[str, str] = env.environ
-        if self.noproxy is not None:
-            # --noproxy replaces NO_PROXY; the variables' map must not apply it.
-            environ = {k: v for k, v in environ.items() if k.lower() != "no_proxy"}
         machine: Any = None
         if _has_proxy_variable(environ) or not system_proxy_enabled(env=env):
-            machine = proxylib.EnvProxyConfig(environ)
+            # --noproxy replaces NO_PROXY in the variables' own map too.
+            machine = proxylib.EnvProxyConfig(environ, no_proxy=self.noproxy)
         else:
             machine = system_map()
         chain = proxylib.ChainProxyMap(*(m for m in (machine, proxylib.SimpleProxyMap()) if m is not None))
