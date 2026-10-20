@@ -291,6 +291,17 @@ def test_httponly_reaches_the_file(web, tmp_path):
     assert "bank.test\tTRUE\t/\tFALSE\t0\twide\t1" in rows
 
 
+def test_a_parent_domain_cookie_reaches_the_hosts_file(web, tmp_path):
+    from syshttp.session import new_session
+
+    session = new_session(cookies=FileCookieJar(tmp_path), retries=0, env=web)
+    _get(session, "http://www.example.test/", "sso=1; Domain=example.test; Path=/")
+    rows = (tmp_path / "cookies" / "www.example.test.txt").read_text(encoding="utf-8").splitlines()[1:]
+    assert rows == ["example.test\tTRUE\t/\tFALSE\t0\tsso\t1"]
+    again = new_session(cookies=FileCookieJar(tmp_path), retries=0, env=web)
+    assert _get(again, "http://www.example.test/") == "sso=1"
+
+
 def test_a_loaded_host_only_row_stays_on_its_host(web):
     from syshttp.cookies import apply_to_session
     from syshttp.session import new_session

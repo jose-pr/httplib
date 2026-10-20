@@ -403,12 +403,16 @@ def new_session(
         except Exception:
             return None
 
+    def _covers(row, host: str) -> bool:
+        # A row's domain is bare; its include-subdomains flag is the dot.
+        return domain_covers("." + row.domain if row.subdomains else row.domain, host)
+
     def _rows_for(key: str, host: str, specs: list) -> list:
         # A host's file holds that host's cookies: by-host keys keep only the
         # rows whose domain covers the host, so a session that talked to two
         # hosts never copies one's cookies into the other's file. A named jar
         # keeps everything.
-        return specs if key != host else [c for c in specs if domain_covers(c.domain, key)]
+        return specs if key != host else [c for c in specs if _covers(c, key)]
 
     def _remember(key: str, host: str) -> None:
         specs = _session_specs(host)
