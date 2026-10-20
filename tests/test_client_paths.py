@@ -133,3 +133,19 @@ def test_an_https_proxy_is_spoken_to_with_the_proxy_context(mtls_server, secure_
     with HTTPClient(ssl_context=origin, proxy_ssl_context=_client(identity=False), env=env) as client:
         with pytest.raises((ssl.SSLError, ConnectionError)):
             client.request("GET", mtls_server, timeout=10)
+
+
+def test_the_origin_inside_an_https_proxy_is_still_verified(mtls_server, secure_tunnel):  # noqa: F811
+    """The origin's TLS runs inside the proxy's: a certificate its context
+    does not trust is refused there too, the system's context included."""
+    env = HTTPEnv(environ={"SYSHTTP_PROXY": secure_tunnel.url, "SYSHTTP_PROXY_AUTH": BEARER})
+    proxy_context = _client()
+    with HTTPClient(proxy_ssl_context=proxy_context, env=env, retries=0) as client:
+        with pytest.raises(ssl.SSLCertVerificationError):
+            client.request("GET", mtls_server, timeout=10)
+    with HTTPClient(
+        ssl_context=ssl.create_default_context(), proxy_ssl_context=proxy_context, env=env, retries=0
+    ) as client:
+        with pytest.raises(ssl.SSLCertVerificationError):
+            client.request("GET", mtls_server, timeout=10)
+    assert len(secure_tunnel.seen) == 2, "both reached the origin through the tunnel before refusing it"
