@@ -7,11 +7,12 @@ from __future__ import annotations
 
 import http.cookiejar
 import ipaddress
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Protocol, Tuple
-from urllib.parse import urlparse
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, Protocol, Tuple, cast
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 from ._fileio import read_text, write_private
 from ._parse import ascii_int, http_date
@@ -28,6 +29,7 @@ __all__ = (
     "apply_to_session",
     "cookie_applies",
     "domain_covers",
+    "host_aliases",
     "host_only_policy",
     "load_netscape",
     "merge_set_cookie_headers",
@@ -199,6 +201,58 @@ def _cookie_domain(host: str, attribute: Optional[str]) -> Optional[Tuple[str, b
     return domain, True
 
 
+_HOST_NAME = re.compile(r"[a-z0-9_-]+(\.[a-z0-9_-]+)*")
+
+
+def _normal_host(host: str) -> str:
+    """``host`` as the alias table keys it: lower case, without IPv6 brackets
+    or a trailing dot."""
+    host = host.strip().lower()
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    return host[:-1] if host.endswith(".") else host
+
+
+def host_aliases(groups: Iterable[Iterable[str]]) -> Dict[str, str]:
+    """Each host of ``groups`` mapped to its group's first host: hosts a user
+    declares to be one for cookies. A group of one host is no alias. A host
+    that is not a name or an IP address (a port, a path, a blank), or that
+    appears in two groups, raises ``ValueError``."""
+    aliases: Dict[str, str] = {}
+    for group in groups:
+        if isinstance(group, str):
+            raise TypeError("a cookie host group is a list of hosts, not the string %r" % group)
+        hosts = []
+        for raw in group:
+            host = _normal_host(raw)
+            if not (_is_ip(host) or _HOST_NAME.fullmatch(host)):
+                raise ValueError("%r is not a host name or an IP address" % raw)
+            if host in aliases:
+                raise ValueError("%r is in two cookie host groups" % raw)
+            if host not in hosts:
+                hosts.append(host)
+        if len(hosts) > 1:
+            aliases.update((host, hosts[0]) for host in hosts)
+    return aliases
+
+
+def _placed_for(
+    host: str, attribute: Optional[str], aliases: Optional[Mapping[str, str]]
+) -> Optional[Tuple[str, bool]]:
+    """:func:`_cookie_domain` with ``host``'s alias group as one host: a
+    cookie with no Domain, or a Domain naming a host of the group, belongs to
+    the group's first host. A Domain outside the group is judged on ``host``."""
+    target = aliases.get(_normal_host(host)) if aliases else None
+    if target is None:
+        return _cookie_domain(host, attribute)
+    named = _normal_host((attribute or "").strip().lstrip("."))
+    if not named:
+        return target, False
+    if aliases.get(named) == target:  # type: ignore[union-attr]
+        return _cookie_domain(target, target)
+    return _cookie_domain(host, attribute)
+
+
 def _default_path(request_path: str) -> str:
     """RFC 6265 section 5.1.4: the directory of the request path."""
     path = request_path.split("?", 1)[0].split("#", 1)[0]
@@ -248,6 +302,7 @@ def set_cookie_specs(
     now: Optional[float] = None,
     *,
     request_path: str = "/",
+    aliases: Optional[Mapping[str, str]] = None,
 ) -> List[Tuple[CookieSpec, bool]]:
     """``(cookie, gone)`` for every cookie the ``Set-Cookie`` header
     ``values`` carry, read as RFC 6265 section 5.2 does.
@@ -260,7 +315,9 @@ def set_cookie_specs(
     ``request_path``. ``gone`` marks a cookie the server expires: an empty
     value, ``Max-Age`` of zero or less, a past date. A header that is not a
     cookie, or names a foreign domain, is skipped. An expiry beyond 400 days
-    is cut to 400 days."""
+    is cut to 400 days. ``aliases`` (:func:`host_aliases`) makes a group of
+    hosts one: a cookie a member sets with no Domain, or with a Domain naming
+    a member, belongs to the group's first host."""
     now = time.time() if now is None else now
     out: List[Tuple[CookieSpec, bool]] = []
     for header in values:
@@ -268,7 +325,7 @@ def set_cookie_specs(
         if parsed is None:
             continue
         name, value, attrs = parsed
-        placed = _cookie_domain(default_domain, attrs.get("domain"))
+        placed = _placed_for(default_domain, attrs.get("domain"), aliases)
         if placed is None:
             continue
         domain, subdomains = placed
@@ -358,11 +415,108 @@ def _spec_from_cookie(cookie: "http.cookiejar.Cookie", host: str) -> CookieSpec:
     )
 
 
-def host_only_policy() -> "http.cookiejar.DefaultCookiePolicy":
+def _with_host(url: str, host: str) -> str:
+    parts = urlsplit(url)
+    netloc = "[%s]" % host if ":" in host else host
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    if port is not None:
+        netloc += ":%d" % port
+    return urlunsplit(parts._replace(netloc=netloc))
+
+
+def _request_host(request) -> str:
+    """The host ``http.cookiejar`` judges a request by: the URL's, else the
+    ``Host`` header's, without a port, lower case."""
+    host = urlsplit(request.get_full_url()).netloc or request.get_header("Host", "")
+    return re.sub(r":\d+$", "", host, count=1).lower()
+
+
+class _AliasedRequest:
+    """A request as ``http.cookiejar`` reads it (requests' ``MockRequest``),
+    with its host replaced by ``host``."""
+
+    def __init__(self, request, host: str) -> None:
+        self._request = request
+        self.alias_host = host
+        self._url = _with_host(request.get_full_url(), host)
+
+    def __getattr__(self, name: str):
+        return getattr(self._request, name)
+
+    def get_full_url(self) -> str:
+        return self._url
+
+    def get_host(self) -> str:
+        return urlsplit(self._url).netloc
+
+    def get_origin_req_host(self) -> str:
+        return self.get_host()
+
+    host = property(get_host)
+    origin_req_host = property(get_origin_req_host)
+
+
+class _AliasPolicy(http.cookiejar.DefaultCookiePolicy):
+    """``http.cookiejar``'s policy with each alias group one host: a member's
+    host-only cookie, or one whose Domain names a member, is stored against
+    the group's first host, and a request to a member carries what a request
+    to any member would."""
+
+    def __init__(self, aliases: Mapping[str, str], **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._aliases = dict(aliases)
+        self._groups: Dict[str, List[str]] = {}
+        for host, first in self._aliases.items():
+            self._groups.setdefault(first, []).append(host)
+
+    def _as_members(self, request) -> List[_AliasedRequest]:
+        host = _normal_host(_request_host(request))
+        first = self._aliases.get(host)
+        return [_AliasedRequest(request, h) for h in self._groups.get(first, []) if h != host] if first else []
+
+    def _as_first(self, request) -> Optional[_AliasedRequest]:
+        target = self._aliases.get(_normal_host(_request_host(request)))
+        return None if target is None else _AliasedRequest(request, target)
+
+    def set_ok(self, cookie, request) -> bool:
+        first: Any = self._as_first(request)
+        if first is None:
+            return super().set_ok(cookie, request)
+        if cookie.domain_specified:
+            # make_cookies has put a dot in front of a Domain attribute.
+            if self._aliases.get(_normal_host(cookie.domain.lstrip("."))) != first.alias_host:
+                return super().set_ok(cookie, request)
+            domain, subdomains = _cookie_domain(first.alias_host, first.alias_host) or (first.alias_host, False)
+        else:
+            domain, subdomains = first.alias_host, False
+        # The cookie was made a moment ago for this response alone.
+        cookie.domain = "." + domain if subdomains else _local_name(_request_host(first))
+        cookie.domain_specified = cookie.domain_initial_dot = subdomains
+        return super().set_ok(cookie, first)
+
+    def return_ok(self, cookie, request) -> bool:
+        return super().return_ok(cookie, request) or any(
+            super(_AliasPolicy, self).return_ok(cookie, cast(Any, other)) for other in self._as_members(request)
+        )
+
+    def domain_return_ok(self, domain, request) -> bool:
+        return super().domain_return_ok(domain, request) or any(
+            super(_AliasPolicy, self).domain_return_ok(domain, cast(Any, other)) for other in self._as_members(request)
+        )
+
+
+def host_only_policy(aliases: Optional[Mapping[str, str]] = None) -> "http.cookiejar.DefaultCookiePolicy":
     """A cookie policy that keeps a cookie set without ``Domain`` on its own
     host, as RFC 6265 and curl do (``http.cookiejar``'s default also sends it
-    to subdomains)."""
-    return http.cookiejar.DefaultCookiePolicy(strict_ns_domain=http.cookiejar.DefaultCookiePolicy.DomainStrictNonDomain)
+    to subdomains). ``aliases`` (:func:`host_aliases`) makes each group of
+    hosts one, as :func:`set_cookie_specs` does."""
+    strict = http.cookiejar.DefaultCookiePolicy.DomainStrictNonDomain
+    if aliases:
+        return _AliasPolicy(aliases, strict_ns_domain=strict)
+    return http.cookiejar.DefaultCookiePolicy(strict_ns_domain=strict)
 
 
 def domain_covers(domain: str, host: str) -> bool:
@@ -409,11 +563,14 @@ def _forget(session: "requests.Session", cookie: CookieSpec) -> None:
             continue
 
 
-def merge_set_cookie_headers(session: "requests.Session", response: "requests.Response") -> None:
+def merge_set_cookie_headers(
+    session: "requests.Session", response: "requests.Response", *, aliases: Optional[Mapping[str, str]] = None
+) -> None:
     """Apply the deletions that ``Set-Cookie`` headers of ``response`` (and of
     the redirect hops before it) ask for and requests' own extraction misses:
     one that names its ``Domain`` differently from how the cookie was stored,
-    and an empty value. Cookies that are set are left to requests, which has
+    one sent by another host of an alias group (``aliases``), and an empty
+    value. Cookies that are set are left to requests, which has
     already stored each once against the URL the caller asked for. A header
     for a domain the response's host does not own is ignored, as on a set."""
     for hop in [*getattr(response, "history", ()), response]:
@@ -425,6 +582,7 @@ def merge_set_cookie_headers(session: "requests.Session", response: "requests.Re
         except Exception:
             continue
         parts = urlparse(getattr(hop, "url", "") or "")
-        for cookie, gone in set_cookie_specs(set_cookies, parts.hostname or "", request_path=parts.path):
+        specs = set_cookie_specs(set_cookies, parts.hostname or "", request_path=parts.path, aliases=aliases)
+        for cookie, gone in specs:
             if gone:
                 _forget(session, cookie)

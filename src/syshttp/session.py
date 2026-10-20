@@ -42,12 +42,19 @@ import re
 import ssl
 import threading
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterable, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 from . import hooks as _hooks
 from .auth import AuthProvider
-from .cookies import _spec_from_cookie, apply_to_session, domain_covers, host_only_policy, merge_set_cookie_headers
+from .cookies import (
+    _spec_from_cookie,
+    apply_to_session,
+    domain_covers,
+    host_aliases,
+    host_only_policy,
+    merge_set_cookie_headers,
+)
 from .env import HTTPEnv
 from .exceptions import ConfigurationError
 from .jar import CookieJar, FileCookieJar, FileTokenJar, TokenJar
@@ -58,7 +65,10 @@ from . import proxy as _proxy
 if TYPE_CHECKING:  # requests is optional at runtime: types only
     import requests
 
-__all__ = ("new_session",)
+__all__ = ("COOKIE_HOSTS", "new_session")
+
+#: The setting naming hosts that share cookies, as ``<P>_COOKIE_HOSTS``.
+COOKIE_HOSTS = "COOKIE_HOSTS"
 
 VerifyT = Union[bool, str, Path]
 
@@ -245,12 +255,14 @@ def _session_class():
     import requests
 
     class Session(requests.Session):  # type: ignore[misc,valid-type]
+        _cookie_aliases: Dict[str, str] = {}
+
         def prepare_request(self, request):
             prepared = super().prepare_request(request)
             jar = getattr(prepared, "_cookies", None)
             if jar is None or not hasattr(jar, "set_policy"):
                 return prepared
-            jar.set_policy(host_only_policy())
+            jar.set_policy(host_only_policy(self._cookie_aliases))
             own = [h for h in (request.headers, self.headers) if h]
             kept = next((v for h in own for k, v in h.items() if str(k).lower() == "cookie"), None)
             prepared.headers.pop("Cookie", None)
@@ -260,6 +272,21 @@ def _session_class():
             return prepared
 
     return Session
+
+
+def _cookie_aliases(cookie_hosts: Optional[Iterable[Iterable[str]]], env: HTTPEnv) -> Dict[str, str]:
+    """``cookie_hosts``, else ``<P>_COOKIE_HOSTS`` (groups split by ``;``,
+    hosts by ``,``), as :func:`cookies.host_aliases` maps them."""
+    if cookie_hosts is not None:
+        return host_aliases(cookie_hosts)
+    raw = env.get(COOKIE_HOSTS)
+    if not raw:
+        return {}
+    groups = [[h for h in group.split(",") if h.strip()] for group in raw.split(";")]
+    try:
+        return host_aliases(groups)
+    except ValueError as exc:
+        raise ConfigurationError("%s: %s" % (env.name(COOKIE_HOSTS), exc)) from None
 
 
 def new_session(
@@ -276,6 +303,7 @@ def new_session(
     env: Optional[HTTPEnv] = None,
     ssl_context: Optional[ssl.SSLContext] = None,
     proxy_ssl_context: Optional[ssl.SSLContext] = None,
+    cookie_hosts: Optional[Iterable[Iterable[str]]] = None,
 ) -> "requests.Session":
     """A ``requests.Session`` configured as the module docstring says.
     ``env`` -- where proxy, jar and hook settings are read
@@ -283,7 +311,9 @@ def new_session(
     the TLS context for every https origin, used as given: its
     ``verify_mode``, trust store, client identity and ciphers decide, so
     ``verify`` must stay ``True`` beside it (anything else: ``ValueError``).
-    ``proxy_ssl_context`` -- the same for an ``https://`` proxy. A status in
+    ``proxy_ssl_context`` -- the same for an ``https://`` proxy.
+    ``cookie_hosts`` -- groups of hosts that share cookies (default
+    ``<P>_COOKIE_HOSTS``; ``[]`` for none). A status in
     ``status_forcelist`` that outlasts ``retries`` is returned as a response
     (not raised); a connection that never succeeds still raises."""
     for name, value in (("ssl_context", ssl_context), ("proxy_ssl_context", proxy_ssl_context)):
@@ -294,8 +324,10 @@ def new_session(
     env = HTTPEnv() if env is None else env
     # First, for its actionable ImportError when requests is absent.
     _, _, Retry = _import_requests()
+    aliases = _cookie_aliases(cookie_hosts, env)
     session = _session_class()()
-    session.cookies.set_policy(host_only_policy())
+    session._cookie_aliases = aliases
+    session.cookies.set_policy(host_only_policy(aliases))
     cookie_jar: Optional[CookieJar] = None
     cookie_key: Optional[str] = None
     if cookies is True:
@@ -385,8 +417,18 @@ def new_session(
             raise ConfigurationError("the token for %r contains a carriage return, line feed or NUL character" % key)
         return token if re.match(r"^[A-Za-z][\w-]*\s+\S", token) else "Bearer " + token
 
-    def _cookie_keys_for(url: str) -> list:
+    def _cookie_host(url: str) -> str:
+        # An alias group's cookies are kept under its first host.
         host = _key_for(url)
+        return aliases.get(host.lower(), host)
+
+    #: Per first host of an alias group, the group's hosts.
+    group_of: dict = {}
+    for alias, first in aliases.items():
+        group_of.setdefault(first, []).append(alias)
+
+    def _cookie_keys_for(url: str) -> list:
+        host = _cookie_host(url)
         if cookie_key and cookie_key != "__by_host__":
             return [cookie_key]
         return [host] if host else []
@@ -412,7 +454,10 @@ def new_session(
         # rows whose domain covers the host, so a session that talked to two
         # hosts never copies one's cookies into the other's file. A named jar
         # keeps everything.
-        return specs if key != host else [c for c in specs if _covers(c, key)]
+        if key != host:
+            return specs
+        hosts = group_of.get(key, [key])
+        return [c for c in specs if any(_covers(c, h) for h in hosts)]
 
     def _remember(key: str, host: str) -> None:
         specs = _session_specs(host)
@@ -429,17 +474,19 @@ def new_session(
                 apply_to_session(session, cookie_jar.get(key, []))
             except Exception:
                 pass
-            _remember(key, _key_for(url))
+            _remember(key, _cookie_host(url))
             loaded_keys.add(key)
 
     def _save_cookies_for(url: str, response: "requests.Response") -> None:
-        if cookie_jar is None:
+        if cookie_jar is None and not aliases:
             return
         try:
-            merge_set_cookie_headers(session, response)
+            merge_set_cookie_headers(session, response, aliases=aliases)
         except Exception:
             pass
-        host = _key_for(url)
+        if cookie_jar is None:
+            return
+        host = _cookie_host(url)
         specs = _session_specs(host)
         if specs is None:
             return
