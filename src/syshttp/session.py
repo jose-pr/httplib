@@ -14,7 +14,7 @@ Jars, tokens, hooks and ``auth_provider`` apply to ``session.request`` (so to
 ``get``, ``post``, ...), not to a bare ``session.send()``, which gets the
 adapter's routing and TLS only.
 
-URL hooks (``<P>_HOOKS_<KEY>`` + ``_PY``, see :mod:`.hooks`) run in the
+URL hooks (``SYSHTTP_HOOKS_<KEY>`` + ``_PY``, see :mod:`.hooks`) run in the
 same place, on the caller's URL, before the request: a hook may log in, set
 headers in the request's kwargs, or return a response of its own. A hook
 that makes requests through the session does not trigger hooks again.
@@ -22,9 +22,10 @@ that makes requests through the session does not trigger hooks again.
 TLS is the system's: with ``verify=True`` the adapter hands urllib3
 ``tls.os_ssl_context()`` (sslcontext's system context: the OS verifies
 servers, and a client certificate comes from the OS store when a server asks)
-and no CA file, so no ``certifi`` bundle is involved. ``verify=<path>`` and ``REQUESTS_CA_BUNDLE`` /
-``CURL_CA_BUNDLE`` still name a bundle explicitly; ``verify=False`` is left to
-requests. ``ssl_context=`` replaces all of that with a context of the caller's
+and no CA file, so no ``certifi`` bundle is involved. ``verify=<path>`` and the
+``CA_BUNDLE`` setting name a bundle explicitly (requests' own
+``REQUESTS_CA_BUNDLE`` / ``CURL_CA_BUNDLE`` are not read); ``verify=False`` is
+left to requests. ``ssl_context=`` replaces all of that with a context of the caller's
 own -- a client certificate (a keystore identity too), a cipher list, a
 pinned protocol version -- used as given for every https origin;
 ``proxy_ssl_context=`` does the same for the TLS to an ``https://`` proxy.
@@ -65,10 +66,12 @@ from . import proxy as _proxy
 if TYPE_CHECKING:  # requests is optional at runtime: types only
     import requests
 
-__all__ = ("COOKIE_HOSTS", "new_session")
+__all__ = ("CA_BUNDLE", "COOKIE_HOSTS", "new_session")
 
-#: The setting naming hosts that share cookies, as ``<P>_COOKIE_HOSTS``.
-COOKIE_HOSTS = "COOKIE_HOSTS"
+#: The settings this module reads, each under every prefix: hosts that share
+#: cookies, and the CA bundle ``verify=True`` uses.
+COOKIE_HOSTS = "SYSHTTP_COOKIE_HOSTS"
+CA_BUNDLE = "CA_BUNDLE"
 
 VerifyT = Union[bool, str, Path]
 
@@ -89,14 +92,10 @@ _ASKED_URL: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar("sy
 
 
 def _explicit_verify(verify: Any) -> bool:
-    """Is ``verify`` something the caller chose beyond the default: ``False``,
-    or a bundle other than the one ``REQUESTS_CA_BUNDLE`` / ``CURL_CA_BUNDLE``
-    name (requests turns ``verify=True`` into that bundle itself)."""
-    if verify is True:
-        return False
-    return not (
-        isinstance(verify, str) and verify in (os.environ.get("REQUESTS_CA_BUNDLE"), os.environ.get("CURL_CA_BUNDLE"))
-    )
+    """Is ``verify`` something the caller chose beyond the default: ``False``
+    or a bundle. A session with an ``ssl_context`` never turns ``True`` into
+    ``CA_BUNDLE``, so anything else came from the caller."""
+    return verify is not True
 
 
 def _proxy_adapter_class():
@@ -256,6 +255,21 @@ def _session_class():
 
     class Session(requests.Session):  # type: ignore[misc,valid-type]
         _cookie_aliases: Dict[str, str] = {}
+        #: Where ``CA_BUNDLE`` is read; ``None`` when the session's
+        #: ``ssl_context`` decides instead.
+        _ca_env: Optional[HTTPEnv] = None
+
+        def merge_environment_settings(self, url, proxies, stream, verify, cert):
+            # requests turns verify=True into REQUESTS_CA_BUNDLE / CURL_CA_BUNDLE;
+            # here CA_BUNDLE, read through the session's prefixes, does instead.
+            default = verify is True or verify is None
+            settings = super().merge_environment_settings(url, proxies, stream, False if default else verify, cert)
+            if default:
+                chosen = self.verify if verify is None else True
+                if chosen is True and self._ca_env is not None:
+                    chosen = self._ca_env.get(CA_BUNDLE) or True
+                settings["verify"] = chosen
+            return settings
 
         def prepare_request(self, request):
             prepared = super().prepare_request(request)
@@ -275,18 +289,19 @@ def _session_class():
 
 
 def _cookie_aliases(cookie_hosts: Optional[Iterable[Iterable[str]]], env: HTTPEnv) -> Dict[str, str]:
-    """``cookie_hosts``, else ``<P>_COOKIE_HOSTS`` (groups split by ``;``,
+    """``cookie_hosts``, else ``SYSHTTP_COOKIE_HOSTS`` (groups split by ``;``,
     hosts by ``,``), as :func:`cookies.host_aliases` maps them."""
     if cookie_hosts is not None:
         return host_aliases(cookie_hosts)
-    raw = env.get(COOKIE_HOSTS)
-    if not raw:
+    found = env.find(COOKIE_HOSTS)
+    if not found:
         return {}
+    variable, raw = found
     groups = [[h for h in group.split(",") if h.strip()] for group in raw.split(";")]
     try:
         return host_aliases(groups)
     except ValueError as exc:
-        raise ConfigurationError("%s: %s" % (env.name(COOKIE_HOSTS), exc)) from None
+        raise ConfigurationError("%s: %s" % (variable, exc)) from None
 
 
 def new_session(
@@ -313,7 +328,7 @@ def new_session(
     ``verify`` must stay ``True`` beside it (anything else: ``ValueError``).
     ``proxy_ssl_context`` -- the same for an ``https://`` proxy.
     ``cookie_hosts`` -- groups of hosts that share cookies (default
-    ``<P>_COOKIE_HOSTS``; ``[]`` for none). A status in
+    ``SYSHTTP_COOKIE_HOSTS``; ``[]`` for none). A status in
     ``status_forcelist`` that outlasts ``retries`` is returned as a response
     (not raised); a connection that never succeeds still raises."""
     for name, value in (("ssl_context", ssl_context), ("proxy_ssl_context", proxy_ssl_context)):
@@ -327,6 +342,7 @@ def new_session(
     aliases = _cookie_aliases(cookie_hosts, env)
     session = _session_class()()
     session._cookie_aliases = aliases
+    session._ca_env = env if ssl_context is None else None
     session.cookies.set_policy(host_only_policy(aliases))
     cookie_jar: Optional[CookieJar] = None
     cookie_key: Optional[str] = None

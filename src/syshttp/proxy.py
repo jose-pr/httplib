@@ -1,25 +1,27 @@
 """Proxy routing: syshttp's settings as one proxylib proxy map.
 
 Settings are read through an :class:`~syshttp.env.HTTPEnv` (``env=``, default
-``HTTPEnv()``); below, ``<P>`` is its prefix, ``SYSHTTP`` unless
-``SYSHTTP_PREFIX`` or the ``HTTPEnv`` says otherwise.
+``HTTPEnv()``), each name under each of its prefixes (``SYSHTTP_PREFIX``);
+below they are named as written, under the empty prefix.
 
 :func:`proxy_map` is a proxylib ``ProxyMap`` that reads the settings at every
 lookup and answers, in order:
 
-1. **``<P>_PROXY``** -- a proxy for this package's traffic, distinct from the
-   machine's so other tools (git, npm, corporate CLIs) are not forced through
-   it. Its credential is ``<P>_PROXY_AUTH`` (a header value sent verbatim, in
-   ``<P>_PROXY_AUTH_HEADER``, default ``Proxy-Authorization``), else the URL's
-   userinfo as Basic. ``<P>_PROXY_TYPE=prefix[:/endpoint]`` makes it a
+1. **``SYSHTTP_PROXY``** -- a proxy for this package's traffic, distinct from
+   the machine's so other tools (git, npm, corporate CLIs) are not forced
+   through it. Its credential is ``SYSHTTP_PROXY_AUTH`` (a header value sent
+   verbatim, in ``SYSHTTP_PROXY_AUTH_HEADER``, default
+   ``Proxy-Authorization``), else the URL's userinfo as Basic.
+   ``SYSHTTP_PROXY_TYPE=prefix[:/endpoint]`` makes it a
    URL-prefix gateway: ``GET https://api.example.com/x`` becomes
    ``GET <proxy><endpoint>https://api.example.com/x``.
 2. **The machine's proxy**: the ``*_PROXY`` variables when any is set (per
-   scheme, as proxylib's ``EnvProxyConfig`` reads them: lowercase first,
-   httpoxy-safe), else the system's configuration for the URL (WinHTTP on
-   Windows, CFNetwork on macOS, libproxy or the desktop's settings
-   elsewhere; PAC scripts and WPAD included), unless ``<P>_SYSTEM_PROXY`` is
-   off. ``HTTP_PROXY_AUTH`` is its credential (``Proxy-Authorization``).
+   scheme, as proxylib's ``EnvProxyConfig`` reads them, the lowercase
+   spelling first under each prefix), else the system's configuration for
+   the URL (WinHTTP on Windows, CFNetwork on macOS, libproxy or the desktop's
+   settings elsewhere; PAC scripts and WPAD included), unless
+   ``SYSHTTP_SYSTEM_PROXY`` is off. ``HTTP_PROXY_AUTH`` is its credential
+   (``Proxy-Authorization``).
 3. **DIRECT.**
 
 ``NO_PROXY`` / ``no_proxy`` hosts go direct before any of it (proxylib's
@@ -35,7 +37,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Any, Mapping, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import proxylib
 from proxylib import NoReachableProxyError, Proxy
@@ -61,20 +63,19 @@ __all__ = (
     "system_proxy_enabled",
 )
 
-#: The settings this module reads, as ``<P>_<NAME>``.
-PROXY = "PROXY"
-PROXY_AUTH = "PROXY_AUTH"
+#: The settings this module reads, each under every prefix.
+PROXY = "SYSHTTP_PROXY"
+PROXY_AUTH = "SYSHTTP_PROXY_AUTH"
 #: The header the credential rides in; default the standard one. A gateway
 #: that wants it under another name (``X-Proxy-Token``) sets this.
-PROXY_AUTH_HEADER = "PROXY_AUTH_HEADER"
+PROXY_AUTH_HEADER = "SYSHTTP_PROXY_AUTH_HEADER"
 #: How the proxy is spoken to: ``connect`` (default) or ``prefix[:/endpoint]``.
-PROXY_TYPE = "PROXY_TYPE"
+PROXY_TYPE = "SYSHTTP_PROXY_TYPE"
 DEFAULT_AUTH_HEADER = "Proxy-Authorization"
 #: Whether the system's proxy configuration is consulted, as a boolean
-#: ``<P>_SYSTEM_PROXY`` (``1``/``true``/``yes``/``on`` or their opposites;
-#: unset or empty: on).
-SYSTEM_PROXY = "SYSTEM_PROXY"
-#: The machine proxy's header value, read under any prefix.
+#: (``1``/``true``/``yes``/``on`` or their opposites; unset or empty: on).
+SYSTEM_PROXY = "SYSHTTP_SYSTEM_PROXY"
+#: The machine proxy's header value.
 MACHINE_AUTH_VAR = "HTTP_PROXY_AUTH"
 #: How long (seconds) the system's configuration, and its answer for one URL,
 #: are reused before they are read again.
@@ -93,12 +94,14 @@ def _env(env: Optional[HTTPEnv]) -> HTTPEnv:
 
 
 def _var(env: HTTPEnv, setting: str) -> str:
-    """The variable to name in a message about ``setting``."""
-    return env.name(setting) or setting
+    """The variable to name in a message about ``setting``: the one set, else
+    the name under the first prefix."""
+    found = env.find(setting)
+    return found[0] if found else env.name(setting)
 
 
 def system_proxy_enabled(*, env: Optional[HTTPEnv] = None) -> bool:
-    """``<P>_SYSTEM_PROXY`` as a boolean, default on. Any other value than
+    """``SYSHTTP_SYSTEM_PROXY`` as a boolean, default on. Any other value than
     ``1``/``true``/``yes``/``on`` or ``0``/``false``/``no``/``off`` (any case)
     is a ``ValueError`` naming the variable."""
     env = _env(env)
@@ -113,8 +116,8 @@ def system_proxy_enabled(*, env: Optional[HTTPEnv] = None) -> bool:
 
 
 def auth_header(*, env: Optional[HTTPEnv] = None) -> str:
-    """The name of the header ``<P>_PROXY_AUTH`` is sent in:
-    ``<P>_PROXY_AUTH_HEADER``, else ``Proxy-Authorization``. A value with
+    """The name of the header ``SYSHTTP_PROXY_AUTH`` is sent in:
+    ``SYSHTTP_PROXY_AUTH_HEADER``, else ``Proxy-Authorization``. A value with
     a colon or whitespace is not a header name: a ``ValueError``."""
     env = _env(env)
     name = env.get(PROXY_AUTH_HEADER)
@@ -128,7 +131,7 @@ def auth_header(*, env: Optional[HTTPEnv] = None) -> str:
 def proxy_type(*, env: Optional[HTTPEnv] = None) -> Tuple[str, Optional[str]]:
     """``("connect", None)`` for a standard proxy, or ``("prefix", "/endpoint")``
     for a URL-prefix gateway (endpoint defaults to ``/``), from
-    ``<P>_PROXY_TYPE``. Anything else is a configuration error, raised."""
+    ``SYSHTTP_PROXY_TYPE``. Anything else is a configuration error, raised."""
     env = _env(env)
     raw = env.get(PROXY_TYPE)
     if not raw:
@@ -168,9 +171,9 @@ def _with_user(proxy: Proxy, user: str) -> Proxy:
 
 
 def configured_proxy(*, env: Optional[HTTPEnv] = None) -> Optional[Proxy]:
-    """``<P>_PROXY`` as a proxylib ``Proxy`` with its credential and kind, or
-    ``None`` when it is unset. ``<P>_PROXY_AUTH`` replaces the URL's
-    userinfo; ``<P>_PROXY_TYPE=prefix`` makes a gateway. A malformed value
+    """``SYSHTTP_PROXY`` as a proxylib ``Proxy`` with its credential and kind,
+    or ``None`` when it is unset. ``SYSHTTP_PROXY_AUTH`` replaces the URL's
+    userinfo; ``SYSHTTP_PROXY_TYPE=prefix`` makes a gateway. A malformed value
     raises ``ValueError`` (``ProxyParseError`` for the URL)."""
     env = _env(env)
     raw = env.get(PROXY)
@@ -188,23 +191,19 @@ def configured_proxy(*, env: Optional[HTTPEnv] = None) -> Optional[Proxy]:
     return _with_credential(found, auth_header(env=env), _checked(_var(env, PROXY_AUTH), value))
 
 
-#: The conventional proxy variables, lower-cased. Not every ``*_PROXY``:
-#: ``<P>_PROXY`` and ``<P>_SYSTEM_PROXY`` are this package's settings.
-_PROXY_VARIABLES = frozenset(s + "_proxy" for s in ("http", "https", "ftp", "ws", "wss", "all"))
+#: The conventional proxy variables, lower-cased.
+_PROXY_VARIABLES = tuple(s + "_proxy" for s in ("http", "https", "ftp", "ws", "wss", "all"))
 
 
-def _has_proxy_variable(environ: Mapping[str, str]) -> bool:
-    """Whether the environment names a proxy: then its variables alone decide
-    (as ``urllib.request.getproxies()`` does) and the system is not asked.
-    Under CGI an uppercase ``HTTP_PROXY`` is a request header (httpoxy)."""
-    cgi = "REQUEST_METHOD" in environ
-    for name, value in environ.items():
-        if not value or not value.strip() or name.lower() not in _PROXY_VARIABLES:
-            continue
-        if cgi and name == "HTTP_PROXY":
-            continue
-        return True
-    return False
+def _proxy_environ(env: HTTPEnv) -> Dict[str, str]:
+    """The conventional proxy variables as ``EnvProxyConfig`` reads them,
+    each found through ``env``'s prefixes (lowercase spelling first)."""
+    found = {}
+    for name in _PROXY_VARIABLES:
+        value = env.get(name, name.upper())
+        if value:
+            found[name] = value
+    return found
 
 
 class _Quiet:
@@ -287,19 +286,23 @@ class _SettingsMap:
         configured = configured_proxy(env=env)
         if configured is not None:
             return proxylib.SimpleProxyMap(configured)
-        environ: Mapping[str, str] = env.environ
+        environ = _proxy_environ(env)
         machine: Any = None
-        if _has_proxy_variable(environ) or not system_proxy_enabled(env=env):
+        if environ or not system_proxy_enabled(env=env):
+            # Its variables alone decide, as urllib.request.getproxies() has it;
             # --noproxy replaces NO_PROXY in the variables' own map too.
+            no_proxy = env.get("no_proxy", "NO_PROXY")
+            if no_proxy:
+                environ["no_proxy"] = no_proxy
             machine = proxylib.EnvProxyConfig(environ, no_proxy=self.noproxy)
         else:
             machine = system_map()
         chain = proxylib.ChainProxyMap(*(m for m in (machine, proxylib.SimpleProxyMap()) if m is not None))
-        value = env.conventional(MACHINE_AUTH_VAR)
-        return _Credential(chain, _checked(MACHINE_AUTH_VAR, value)) if value else chain
+        found = env.find(MACHINE_AUTH_VAR)
+        return _Credential(chain, _checked(*found)) if found else chain
 
     def _no_proxy(self, env: HTTPEnv) -> Optional[str]:
-        return self.noproxy if self.noproxy is not None else env.conventional("NO_PROXY", "no_proxy")
+        return self.noproxy if self.noproxy is not None else env.get("no_proxy", "NO_PROXY")
 
     def __getitem__(self, url: str) -> Tuple[Optional[Proxy], ...]:
         env = _env(self.env)
@@ -330,7 +333,7 @@ def proxy_map(
 
     ``proxy`` (curl's ``-x``) replaces the settings with that proxy, always a
     plain one whose credential is its own userinfo, never the configured
-    ``<P>_PROXY_AUTH``; ``""`` means direct. ``noproxy`` (``--noproxy``)
+    ``SYSHTTP_PROXY_AUTH``; ``""`` means direct. ``noproxy`` (``--noproxy``)
     replaces ``NO_PROXY``. ``proxy_user`` (``-U user:password``) becomes the
     credential of whichever proxy answers, replacing the configured one. A
     malformed setting raises ``ValueError`` at lookup, only when it would be

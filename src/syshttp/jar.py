@@ -1,7 +1,7 @@
 """File-backed cookie/token jars, keyed by host.
 
-Jars live under one root, :func:`store_root`: ``<P>_HOME`` (``SYSHTTP_HOME``
-by default; see :mod:`syshttp.env`), else the platform's per-user state
+Jars live under one root, :func:`store_root`: ``SYSHTTP_HOME`` (under the
+prefixes of :mod:`syshttp.env`), else the platform's per-user state
 directory. Cookies go under ``<root>/cookies/<host>.txt`` (Netscape format),
 tokens under ``<root>/tokens/<host>.token``.
 
@@ -33,8 +33,8 @@ __all__ = (
     "store_root",
 )
 
-#: The setting naming the jar root, as ``<P>_HOME``.
-HOME = "HOME"
+#: The setting naming the jar root.
+HOME = "SYSHTTP_HOME"
 
 _UNSAFE = '<>:"/\\|?*'
 
@@ -46,22 +46,22 @@ def safe_name(key: str) -> str:
 
 
 def default_root(*, env: Optional[HTTPEnv] = None) -> Path:
-    """The per-user state directory for jars when ``<P>_HOME`` is unset, a
+    """The per-user state directory for jars when ``SYSHTTP_HOME`` is unset, a
     directory ``syshttp`` under: ``%LOCALAPPDATA%`` on Windows,
     ``~/Library/Application Support`` on macOS, ``$XDG_STATE_HOME`` (else
     ``~/.local/state``) elsewhere."""
     env = HTTPEnv() if env is None else env
     if sys.platform == "win32":
-        base = env.conventional("LOCALAPPDATA")
+        base = (env.environ.get("LOCALAPPDATA") or "").strip()
         return (Path(base) if base else Path.home() / "AppData" / "Local") / "syshttp"
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "syshttp"
-    base = env.conventional("XDG_STATE_HOME")
+    base = (env.environ.get("XDG_STATE_HOME") or "").strip()
     return (Path(base) if base else Path.home() / ".local" / "state") / "syshttp"
 
 
 def store_root(*, env: Optional[HTTPEnv] = None) -> Path:
-    """The jar root: ``<P>_HOME``, else :func:`default_root`."""
+    """The jar root: ``SYSHTTP_HOME``, else :func:`default_root`."""
     env = HTTPEnv() if env is None else env
     home = env.get(HOME)
     return Path(home).expanduser() if home else default_root(env=env)

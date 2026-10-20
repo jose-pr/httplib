@@ -88,7 +88,7 @@ def test_an_unknown_name_is_logged_and_skipped(caplog):
 def test_a_prefix_of_its_own_names_prefix_syshttp_importpatch():
     env = HTTPEnv(
         environ={
-            "SYSHTTP_PREFIX": "AGENTS",
+            "SYSHTTP_PREFIX": "AGENTS_",
             "AGENTS_SYSHTTP_IMPORTPATCH": "httpx",
             "AGENTS_IMPORTPATCH": "1",
             "SYSHTTP_IMPORTPATCH": "1",
@@ -98,12 +98,18 @@ def test_a_prefix_of_its_own_names_prefix_syshttp_importpatch():
     assert autopatch.enabled(env=env) == {"httpx"}
 
 
-@pytest.mark.parametrize("prefix", [None, "SYSHTTP", ""])
-def test_the_default_or_no_prefix_reads_syshttp_importpatch(prefix):
+@pytest.mark.parametrize("prefixes", [None, "", "AGENTS_:"])
+def test_the_empty_prefix_reads_syshttp_importpatch(prefixes):
     environ = {"SYSHTTP_IMPORTPATCH": "requests"}
-    env = HTTPEnv(environ=environ) if prefix is None else HTTPEnv(prefix=prefix, environ=environ)
+    env = HTTPEnv(environ=environ) if prefixes is None else HTTPEnv(prefixes, environ=environ)
     assert autopatch.setting_name(env=env) == "SYSHTTP_IMPORTPATCH"
     assert autopatch.enabled(env=env) == {"requests"}
+
+
+def test_a_prefix_list_without_the_empty_entry_ignores_syshttp_importpatch():
+    env = HTTPEnv(environ={"SYSHTTP_PREFIX": "AGENTS_", "SYSHTTP_IMPORTPATCH": "requests"})
+    assert autopatch.setting_name(env=env) == "AGENTS_SYSHTTP_IMPORTPATCH"
+    assert autopatch.enabled(env=env) == frozenset()
 
 
 def test_the_entry_point_patches_only_what_the_setting_enables(monkeypatch):

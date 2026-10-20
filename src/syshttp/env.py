@@ -1,11 +1,15 @@
-"""Where syshttp's settings come from: one prefix, one environment mapping.
+"""Where syshttp's settings come from: a list of prefixes, one environment
+mapping.
 
-Every setting of this package is the variable ``<PREFIX>_<NAME>`` --
-``SYSHTTP_PROXY``, ``SYSHTTP_PROXY_AUTH``, ``SYSHTTP_HOOKS_<KEY>`` -- and the
-prefix itself comes from ``SYSHTTP_PREFIX`` (default ``SYSHTTP``), so a tool
-embedding syshttp can give it a namespace of its own (``SYSHTTP_PREFIX=MYTOOL``
-reads ``MYTOOL_PROXY``). Conventional variables keep their names under any
-prefix: ``HTTPS_PROXY`` / ``HTTP_PROXY`` / ``ALL_PROXY``, ``NO_PROXY``.
+Every setting is a variable with a full name -- syshttp's own carry
+``SYSHTTP_`` (``SYSHTTP_PROXY``, ``SYSHTTP_HOME``, ``SYSHTTP_HOOKS_<KEY>``),
+conventional ones keep theirs (``HTTPS_PROXY``, ``NO_PROXY``, ``CA_BUNDLE``)
+-- read as ``<PREFIX><NAME>`` for each prefix in turn, the first one set
+winning. The prefixes come from ``SYSHTTP_PREFIX``, a ``:``-separated list
+taken literally (``AGENTS_`` reads ``AGENTS_HTTPS_PROXY``); blank or unset is
+one empty prefix, the names as written. A tool embedding syshttp therefore
+opts out of the defaults with ``SYSHTTP_PREFIX=MYTOOL_`` or layers its own over
+them with ``MYTOOL_:`` (the empty entry last).
 
 An :class:`HTTPEnv` holds one such view. Two of them with different prefixes or
 mappings never see each other's settings, which is how one process serves
@@ -13,64 +17,68 @@ several configurations; every function that reads a setting takes one as
 ``env=`` and builds a default ``HTTPEnv()`` when given none. Nothing is read at
 import: a variable set later takes effect on the next call.
 
-``prefix=""`` turns the package's own settings off -- only the conventional
-variables are read. It is an argument only: an empty ``SYSHTTP_PREFIX`` counts
-as unset. ``HTTP`` and any prefix starting ``HTTP_`` are refused: CGI exports
-every request header as an ``HTTP_*`` variable, and a setting such as
-``HOOKS_<KEY>_PY`` names code to import.
+A CGI program gets every request header as an ``HTTP_*`` variable, so a
+client could choose ``HTTP_PROXY`` and its kin: under CGI, set a prefix list
+without the empty entry.
 """
 
 from __future__ import annotations
 
 import os
 import re
-from typing import Iterator, Mapping, Optional, Tuple
+from typing import Iterable, Iterator, Mapping, Optional, Tuple, Union
 
 from .exceptions import ConfigurationError
 
-__all__ = ["DEFAULT_PREFIX", "PREFIX_VAR", "HTTPEnv"]
+__all__ = ["PREFIX_VAR", "HTTPEnv"]
 
-#: The variable naming the prefix of every other setting.
+#: The variable naming the prefixes, ``:``-separated. Read as written: it has
+#: no prefix of its own.
 PREFIX_VAR = "SYSHTTP_PREFIX"
-#: The prefix when neither an argument nor ``SYSHTTP_PREFIX`` gives one.
-DEFAULT_PREFIX = "SYSHTTP"
 
-_PREFIX_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)*\Z")
+_PREFIX_RE = re.compile(r"[A-Za-z0-9_]*\Z")
 
 
 def _check_prefix(prefix: str, source: str) -> str:
     # The argument is a caller's mistake (ValueError); the variable is a setting.
-    error = ConfigurationError if source == PREFIX_VAR else ValueError
-    if prefix and not _PREFIX_RE.match(prefix):
-        raise error(
-            "%s must be letters, digits and single inner underscores, starting with a letter, not %r" % (source, prefix)
-        )
+    prefix = prefix.strip()
+    if not _PREFIX_RE.match(prefix):
+        error = ConfigurationError if source == PREFIX_VAR else ValueError
+        raise error("%s holds letters, digits and underscores only, not %r" % (source, prefix))
     # Upper case, as variable names are: Windows upper-cases os.environ's keys,
     # so a lower-case prefix would match there and nowhere else.
-    prefix = prefix.upper()
-    if prefix == "HTTP" or prefix.startswith("HTTP_"):
-        raise error(
-            "%s must not be HTTP or start with HTTP_, not %r: CGI exports request headers as HTTP_* variables, "
-            "so a client would choose the settings and the hooks" % (source, prefix)
-        )
-    return prefix
+    return prefix.upper()
+
+
+def _prefix_list(prefixes: Iterable[str], source: str) -> Tuple[str, ...]:
+    found = []
+    for prefix in prefixes:
+        prefix = _check_prefix(prefix, source)
+        if prefix not in found:
+            found.append(prefix)
+    return tuple(found)
 
 
 class HTTPEnv:
-    """A view of the environment under one prefix.
+    """A view of the environment through a list of prefixes.
 
-    ``prefix`` -- ``None`` (read ``SYSHTTP_PREFIX`` at each lookup, default
-    ``SYSHTTP``), a prefix such as ``"MYTOOL"``, or ``""`` for conventional
-    variables only. ``environ`` -- the mapping to read, default ``os.environ``
-    as it is at each lookup. A malformed prefix is a ``ValueError``: from the
-    constructor for an argument, from the first lookup for ``SYSHTTP_PREFIX``;
-    so is ``HTTP`` or a prefix starting ``HTTP_``.
+    ``prefixes`` -- ``None`` (read ``SYSHTTP_PREFIX`` at each lookup; blank or
+    unset is ``("",)``), a ``:``-separated string, or an iterable of prefixes;
+    each is used literally and upper-cased, ``""`` meaning the names as
+    written, and an empty iterable reading nothing. ``environ`` -- the mapping
+    to read, default ``os.environ`` as it is at each lookup. A malformed
+    prefix is a ``ValueError``: from the constructor for an argument, from
+    the first lookup for ``SYSHTTP_PREFIX`` (a ``ConfigurationError``).
     """
 
-    __slots__ = ("_prefix", "_environ")
+    __slots__ = ("_prefixes", "_environ")
 
-    def __init__(self, prefix: Optional[str] = None, environ: Optional[Mapping[str, str]] = None) -> None:
-        self._prefix = None if prefix is None else _check_prefix(prefix, "prefix")
+    def __init__(
+        self, prefixes: Union[str, Iterable[str], None] = None, environ: Optional[Mapping[str, str]] = None
+    ) -> None:
+        if isinstance(prefixes, str):
+            prefixes = prefixes.split(":")
+        self._prefixes = None if prefixes is None else _prefix_list(prefixes, "prefixes")
         self._environ = environ
 
     @property
@@ -79,50 +87,58 @@ class HTTPEnv:
         return os.environ if self._environ is None else self._environ
 
     @property
-    def prefix(self) -> str:
-        """The prefix in force: the argument, else ``SYSHTTP_PREFIX``, else
-        ``SYSHTTP``. ``""`` means the package's own settings are off."""
-        if self._prefix is not None:
-            return self._prefix
+    def prefixes(self) -> Tuple[str, ...]:
+        """The prefixes in force, in lookup order: the argument, else
+        ``SYSHTTP_PREFIX``, else ``("",)``."""
+        if self._prefixes is not None:
+            return self._prefixes
         raw = (self.environ.get(PREFIX_VAR) or "").strip()
-        return _check_prefix(raw, PREFIX_VAR) if raw else DEFAULT_PREFIX
+        return _prefix_list(raw.split(":"), PREFIX_VAR) if raw else ("",)
 
-    def name(self, setting: str) -> Optional[str]:
-        """The variable for ``setting`` (``"PROXY"`` -> ``"SYSHTTP_PROXY"``),
-        or ``None`` when the prefix is ``""``."""
-        prefix = self.prefix
-        return "%s_%s" % (prefix, setting) if prefix else None
+    def name(self, name: str) -> str:
+        """The variable for ``name`` under the first prefix: what a message
+        names when nothing is set, and what a child process is given."""
+        prefixes = self.prefixes
+        return (prefixes[0] if prefixes else "") + name
 
-    def get(self, setting: str) -> Optional[str]:
-        """The value of ``setting``, stripped; ``None`` when unset or empty."""
-        name = self.name(setting)
-        return self.conventional(name) if name else None
-
-    def conventional(self, *names: str) -> Optional[str]:
-        """The first of ``names`` (variables read as named, under no prefix)
-        that is set and not empty, stripped; else ``None``."""
+    def find(self, *names: str) -> Optional[Tuple[str, str]]:
+        """``(variable, value)`` for the first of ``names`` set, not blank,
+        under the first prefix that has one (every name is tried under a
+        prefix before the next prefix); the value stripped. ``None`` when
+        none is."""
         env = self.environ
-        for name in names:
-            value = (env.get(name) or "").strip()
-            if value:
-                return value
+        for prefix in self.prefixes:
+            for name in names:
+                variable = prefix + name
+                value = (env.get(variable) or "").strip()
+                if value:
+                    return variable, value
         return None
 
-    def family(self, stem: str) -> Iterator[Tuple[str, str]]:
-        """``(rest, value)`` for every variable named ``<PREFIX>_<stem><rest>``
-        with a non-empty ``rest`` and a value that is not blank (stripped, as
-        :meth:`get` strips), in name order; nothing when the prefix is ``""``."""
-        head = self.name(stem)
-        if not head:
-            return
+    def get(self, *names: str) -> Optional[str]:
+        """The value :meth:`find` finds, or ``None``."""
+        found = self.find(*names)
+        return found[1] if found else None
+
+    def family(self, stem: str) -> Iterator[Tuple[str, str, str]]:
+        """``(rest, value, variable)`` for every variable named
+        ``<PREFIX><stem><rest>`` with a non-empty ``rest`` and a value that is
+        not blank (stripped), the first prefix winning for a ``rest`` (compared
+        upper-cased); in prefix order, then name order."""
         env = self.environ
-        for name in sorted(env):
-            if name.startswith(head) and len(name) > len(head):
-                value = (env[name] or "").strip()
-                if value:
-                    yield name[len(head) :], value
+        seen = set()
+        for prefix in self.prefixes:
+            head = prefix + stem
+            for variable in sorted(env):
+                if not variable.startswith(head) or len(variable) == len(head):
+                    continue
+                rest = variable[len(head) :]
+                value = (env[variable] or "").strip()
+                if value and rest.upper() not in seen:
+                    seen.add(rest.upper())
+                    yield rest, value, variable
 
     def __repr__(self) -> str:
-        prefix = "from %s" % PREFIX_VAR if self._prefix is None else repr(self._prefix)
+        prefixes = "from %s" % PREFIX_VAR if self._prefixes is None else repr(":".join(self._prefixes))
         source = "os.environ" if self._environ is None else "a mapping"
-        return "HTTPEnv(prefix %s, %s)" % (prefix, source)
+        return "HTTPEnv(prefixes %s, %s)" % (prefixes, source)

@@ -1,17 +1,17 @@
 """URL hooks: a wrapper a curl front end runs, or a callable ``syshttp``
 calls, for requests whose URL matches a pattern -- declared in the
-environment, under the prefix of an :class:`~syshttp.env.HTTPEnv` (``<P>``,
-``SYSHTTP`` by default). ``<P>_HOOKS_<KEY>`` (plural) declares a hook;
-``<P>_HOOK_<NAME>`` (singular) is a variable one hook RUN exports to its
-wrapper. With the prefix ``""`` no hook is read.
+environment, each variable read under the prefixes of an
+:class:`~syshttp.env.HTTPEnv`. ``SYSHTTP_HOOKS_<KEY>`` (plural) declares a
+hook; ``SYSHTTP_HOOK_<NAME>`` (singular) is a variable one hook RUN exports to
+its wrapper.
 
-    <P>_HOOKS_<KEY>=<regex>               matched (re.search) against the URL the
-                                          caller asked for -- the origin URL, never
-                                          the proxy's or a prefix gateway's rewrite
-    <P>_HOOKS_<KEY>_CURL=<command>        a curl front end runs THIS instead of
-                                          itself, with its own argv appended
-    <P>_HOOKS_<KEY>_PY=<module:callable>  syshttp calls it before the request:
-                                          callable(session, method, url, kwargs)
+    SYSHTTP_HOOKS_<KEY>=<regex>               matched (re.search) against the URL
+                                              the caller asked for -- the origin URL,
+                                              never the proxy's or a gateway's rewrite
+    SYSHTTP_HOOKS_<KEY>_CURL=<command>        a curl front end runs THIS instead of
+                                              itself, with its own argv appended
+    SYSHTTP_HOOKS_<KEY>_PY=<module:callable>  syshttp calls it before the request:
+                                              callable(session, method, url, kwargs)
 
 A hook does what it wants with the session (log in, set a header in
 ``kwargs["headers"]``, refresh a token in the jar) and returns ``None`` to
@@ -28,10 +28,10 @@ arguments -- that the front end's whole argv is appended to::
 Quote (single or double) what has spaces; a backslash is literal on every
 platform, so a Windows path needs no doubling. A first word that is a
 ``.py`` file runs under the front end's interpreter. The wrapper receives
-(:func:`wrapper_environment`) ``<P>_HOOK_URL`` (the requested URL, so it need
-not parse argv), ``<P>_HOOK_KEY`` (which hook matched), ``<P>_HOOK_CURL``
-naming the front end so it can call curl back after its own work, and
-``<P>_HOOK_SKIP`` carrying its KEY, so that call does not run the same
+(:func:`wrapper_environment`) ``SYSHTTP_HOOK_URL`` (the requested URL, so it
+need not parse argv), ``SYSHTTP_HOOK_KEY`` (which hook matched),
+``SYSHTTP_HOOK_CURL`` naming the front end so it can call curl back after its
+own work, and ``SYSHTTP_HOOK_SKIP`` carrying its KEY, so that call does not run the same
 wrapper again. A hook with only a ``_PY`` target is ignored by a curl front
 end, one with only ``_CURL`` by syshttp.
 
@@ -84,15 +84,15 @@ __all__ = (
 #: What a ``_PY`` hook is: ``(session, method, url, kwargs) -> None | response``.
 PyHook = Callable[["requests.Session", str, str, Dict[str, Any]], "Optional[requests.Response]"]
 
-#: The settings, as ``<P>_<NAME>``: ``HOOKS`` + KEY declares a hook, the
-#: ``HOOK_*`` ones are what a hook run exports to its wrapper.
-HOOKS = "HOOKS_"
+#: The settings, each read under every prefix: ``HOOKS`` + KEY declares a
+#: hook, the ``HOOK_*`` ones are what a hook run exports to its wrapper.
+HOOKS = "SYSHTTP_HOOKS_"
 CURL_SUFFIX = "_CURL"
 PY_SUFFIX = "_PY"
-HOOK_SKIP = "HOOK_SKIP"
-HOOK_URL = "HOOK_URL"
-HOOK_KEY = "HOOK_KEY"
-HOOK_CURL = "HOOK_CURL"
+HOOK_SKIP = "SYSHTTP_HOOK_SKIP"
+HOOK_URL = "SYSHTTP_HOOK_URL"
+HOOK_KEY = "SYSHTTP_HOOK_KEY"
+HOOK_CURL = "SYSHTTP_HOOK_CURL"
 
 
 def _env(env: Optional[HTTPEnv]) -> HTTPEnv:
@@ -133,30 +133,30 @@ class Hook(object):
 
 def hooks_from_env(*, env: Optional[HTTPEnv] = None) -> List[Hook]:
     """Every configured hook, in KEY order. KEYs are upper-cased (variable
-    names are compared as Windows compares them), so ``HOOKS_mykey`` and
-    ``HOOKS_MYKEY`` are one hook. A ``_CURL``/``_PY`` variable whose KEY has
+    names are compared as Windows compares them), so ``SYSHTTP_HOOKS_mykey``
+    and ``SYSHTTP_HOOKS_MYKEY`` are one hook; the first prefix that declares a
+    variable of the hook wins for that variable. A ``_CURL``/``_PY`` variable whose KEY has
     no pattern is ignored (nothing to match), and so is a blank target."""
     env = _env(env)
-    found = {rest.upper(): (rest, value) for rest, value in env.family(HOOKS)}
+    found = {rest.upper(): (value, variable) for rest, value, variable in env.family(HOOKS)}
     hooks = []
     for key in sorted(found):
         if key.endswith((CURL_SUFFIX, PY_SUFFIX)):
             continue
-        rest, value = found[key]
-        variable = env.name(HOOKS + rest) or HOOKS + rest
+        value, variable = found[key]
         try:
             pattern = re.compile(value)
         except re.error as exc:
             raise ConfigurationError("%s is not a valid regular expression: %s" % (variable, exc))
-        curl = found.get(key + CURL_SUFFIX, (None, None))[1]
-        py = found.get(key + PY_SUFFIX, (None, None))[1]
+        curl = found.get(key + CURL_SUFFIX, (None, None))[0]
+        py = found.get(key + PY_SUFFIX, (None, None))[0]
         if curl or py:
             hooks.append(Hook(key, pattern, curl, py, variable))
     return hooks
 
 
 def skipped(*, env: Optional[HTTPEnv] = None) -> "set[str]":
-    """The KEYs ``<P>_HOOK_SKIP`` (a comma list) says not to run, upper-cased."""
+    """The KEYs ``SYSHTTP_HOOK_SKIP`` (a comma list) says not to run, upper-cased."""
     return {k.strip().upper() for k in (_env(env).get(HOOK_SKIP) or "").split(",") if k.strip()}
 
 
@@ -292,13 +292,11 @@ def curl_command(hook: Hook, python: Optional[str] = None) -> List[str]:
 
 def wrapper_environment(hook: Hook, url: str, entry: str, *, env: Optional[HTTPEnv] = None) -> Dict[str, str]:
     """The variables a ``_CURL`` wrapper run adds to its environment:
-    ``<P>_HOOK_URL`` (``url``), ``<P>_HOOK_KEY``, ``<P>_HOOK_CURL`` (``entry``,
-    the front end to call back) and ``<P>_HOOK_SKIP`` with this KEY added, so
-    the call back does not run the wrapper again. Empty under the prefix ``""``."""
+    ``SYSHTTP_HOOK_URL`` (``url``), ``SYSHTTP_HOOK_KEY``, ``SYSHTTP_HOOK_CURL``
+    (``entry``, the front end to call back) and ``SYSHTTP_HOOK_SKIP`` with this
+    KEY added, so the call back does not run the wrapper again; each under the
+    first prefix."""
     env = _env(env)
-    names = [env.name(setting) for setting in (HOOK_URL, HOOK_KEY, HOOK_CURL, HOOK_SKIP)]
-    url_var, key_var, curl_var, skip_var = names
-    if not (url_var and key_var and curl_var and skip_var):
-        return {}
+    url_var, key_var, curl_var, skip_var = (env.name(s) for s in (HOOK_URL, HOOK_KEY, HOOK_CURL, HOOK_SKIP))
     skip = ",".join(sorted(skipped(env=env) | {hook.key.upper()}))
     return {url_var: url, key_var: hook.key, curl_var: entry, skip_var: skip}

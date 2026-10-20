@@ -3,9 +3,8 @@ the way syshttp does: routing by :func:`syshttp.proxy.proxy_map` through
 proxylib's client integrations (``proxylib.patch``), and TLS by the system's
 context (:func:`syshttp.tls.os_ssl_context`).
 
-``SYSHTTP_IMPORTPATCH`` chooses the libraries -- ``<PREFIX>_SYSHTTP_IMPORTPATCH``
-under a prefix of a tool's own (``SYSHTTP_PREFIX=AGENTS``:
-``AGENTS_SYSHTTP_IMPORTPATCH``): ``1``/``true``/``yes``/``on`` for all of
+``SYSHTTP_IMPORTPATCH`` chooses the libraries -- read under the prefixes as
+every setting is (``SYSHTTP_PREFIX=AGENTS_``: ``AGENTS_SYSHTTP_IMPORTPATCH``): ``1``/``true``/``yes``/``on`` for all of
 :data:`TARGETS`, ``0``/``false``/``no``/``off``, empty or unset for none, else
 their names separated by ``:`` (``requests:httpx``; a module name such as
 ``urllib.request`` works too). It is read when the library is imported:
@@ -31,12 +30,11 @@ from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Tup
 
 # Neither proxylib nor syshttp.proxy is imported here: proxylib's own import
 # of urllib.request runs this module's hook while proxylib is half built.
-from .env import DEFAULT_PREFIX, HTTPEnv
+from .env import HTTPEnv
 
 __all__ = ["SETTING", "TARGETS", "enabled", "importpatch", "patch", "patched", "setting_name", "unpatch"]
 
-#: The variable, under the default prefix or none; ``<PREFIX>_SYSHTTP_IMPORTPATCH``
-#: under any other prefix (:func:`setting_name`).
+#: The setting, read under every prefix as any other is (:func:`setting_name`).
 SETTING = "SYSHTTP_IMPORTPATCH"
 #: The libraries that can be patched: name -> the module whose import patches it.
 TARGETS: Dict[str, str] = {
@@ -57,12 +55,12 @@ _undo: Dict[str, List[Callable[[], None]]] = {}
 
 
 def setting_name(*, env: Optional[HTTPEnv] = None) -> str:
-    """The variable that chooses the libraries: ``SYSHTTP_IMPORTPATCH`` under
-    the default prefix or the empty one, ``<PREFIX>_SYSHTTP_IMPORTPATCH``
-    under any other (``AGENTS_SYSHTTP_IMPORTPATCH``)."""
+    """The variable that chooses the libraries: ``<PREFIX>SYSHTTP_IMPORTPATCH``
+    for the first prefix that sets it (``AGENTS_SYSHTTP_IMPORTPATCH`` under
+    ``SYSHTTP_PREFIX=AGENTS_``), else the name under the first prefix."""
     env = HTTPEnv() if env is None else env
-    prefix = env.prefix
-    return SETTING if prefix in ("", DEFAULT_PREFIX) else "%s_%s" % (prefix, SETTING)
+    found = env.find(SETTING)
+    return found[0] if found else env.name(SETTING)
 
 
 def enabled(*, env: Optional[HTTPEnv] = None) -> FrozenSet[str]:
@@ -70,7 +68,7 @@ def enabled(*, env: Optional[HTTPEnv] = None) -> FrozenSet[str]:
     separated. A name that is not a target is logged at WARNING and skipped."""
     env = HTTPEnv() if env is None else env
     name = setting_name(env=env)
-    raw = (env.environ.get(name) or "").strip()
+    raw = env.get(SETTING) or ""
     if raw.lower() in _FALSE:
         return frozenset()
     if raw.lower() in _TRUE:

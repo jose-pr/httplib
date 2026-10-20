@@ -5,13 +5,13 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _no_ambient_settings(monkeypatch):
-    """No test sees an SYSHTTP_* variable of the machine running it --
-    SYSHTTP_PREFIX included, which would rename every other setting -- nor the
+    """No test sees an SYSHTTP_* or CA_BUNDLE variable of the machine running
+    it -- SYSHTTP_PREFIX included, which would rename every other setting -- nor the
     machine's system proxy configuration, nor its certificate store and smart
     cards when a server asks for a client certificate (tests that need one
     fake it). The OS still verifies servers."""
     for name in list(os.environ):
-        if name.startswith("SYSHTTP_"):
+        if name.startswith("SYSHTTP_") or name == "CA_BUNDLE":
             monkeypatch.delenv(name)
     import proxylib
 

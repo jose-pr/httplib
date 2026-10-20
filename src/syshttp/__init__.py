@@ -2,20 +2,20 @@
 ``requests`` session on top.
 
 Public surface (the package's AGENTS.md documents each name):
-  env.HTTPEnv                          — where settings come from: <P>_<NAME>, the
-                                         prefix from SYSHTTP_PREFIX (default SYSHTTP)
-  proxy.proxy_map                      — the routing as a proxylib ProxyMap: <P>_PROXY with
+  env.HTTPEnv                          — where settings come from: <PREFIX><NAME> for each
+                                         prefix of SYSHTTP_PREFIX (default: none)
+  proxy.proxy_map                      — the routing as a proxylib ProxyMap: SYSHTTP_PROXY with
                                          its credential, else the *_PROXY variables or the
                                          system's configuration, NO_PROXY first (-x / -U /
                                          --noproxy overrides included)
-  proxy.configured_proxy / proxy_type  — <P>_PROXY as a proxylib Proxy; <P>_PROXY_TYPE
+  proxy.configured_proxy / proxy_type  — SYSHTTP_PROXY as a proxylib Proxy; SYSHTTP_PROXY_TYPE
                                          (connect | prefix[:/endpoint])
   cookies.load_netscape / save_netscape / cookie_applies / set_cookie_specs
                                        — Netscape jars and curl's cookie rules
   tls.os_ssl_context / new_os_context  — the system's TLS client (sslcontext) as an SSLContext
   retry.TRANSIENT_STATUSES / retry_after — what counts as transient, Retry-After
-  jar.FileCookieJar / FileTokenJar     — file-backed jars under <P>_HOME
-  hooks                                — <P>_HOOKS_<KEY> URL hooks (a curl wrapper,
+  jar.FileCookieJar / FileTokenJar     — file-backed jars under SYSHTTP_HOME
+  hooks                                — SYSHTTP_HOOKS_<KEY> URL hooks (a curl wrapper,
                                          an syshttp callable) matched on the caller's URL
   session.new_session                  — configured requests.Session
   fetch.request_text / request_json / request_with_reauth / *_auto helpers

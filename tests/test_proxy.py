@@ -54,9 +54,30 @@ def test_direct_when_nothing_is_set():
     assert _urls("https://example.com/", {}) == [None]
 
 
-def test_httpoxy_an_uppercase_http_proxy_under_cgi_is_ignored():
-    environ = {"REQUEST_METHOD": "GET", "HTTP_PROXY": "http://attacker:8080", "SYSHTTP_PROXY_AUTH": "Bearer x"}
+def test_a_prefix_list_without_the_empty_entry_never_reads_http_variables():
+    # What a CGI program sets: request headers arrive as HTTP_* variables.
+    environ = {
+        "SYSHTTP_PREFIX": "APP_",
+        "REQUEST_METHOD": "GET",
+        "HTTP_PROXY": "http://attacker:8080",
+        "HTTP_PROXY_AUTH": "Basic eA==",
+        "APP_HTTPS_PROXY": "http://own:3128",
+    }
     assert _urls("http://example.com/", environ) == [None]
+    assert _urls("https://example.com/", environ) == ["http://own:3128"]
+
+
+def test_each_proxy_variable_falls_back_through_the_prefixes_on_its_own():
+    environ = {
+        "SYSHTTP_PREFIX": "AGENTS_:",
+        "AGENTS_HTTPS_PROXY": "http://agent:1",
+        "HTTPS_PROXY": "http://corp:2",
+        "HTTP_PROXY": "http://corp:3",
+        "NO_PROXY": "corp.example",
+    }
+    assert _urls("https://a.example/", environ) == ["http://agent:1"]
+    assert _urls("http://a.example/", environ) == ["http://corp:3"]
+    assert _urls("https://git.corp.example/", environ) == [None]
 
 
 def test_a_pac_result_in_a_variable_is_a_list_to_try():

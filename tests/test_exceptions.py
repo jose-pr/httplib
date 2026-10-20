@@ -38,9 +38,9 @@ def test_a_malformed_proxy_setting_is_a_configuration_error(environ):
 
 def test_a_malformed_prefix_variable_is_a_configuration_error_and_the_argument_is_not():
     with pytest.raises(ConfigurationError, match="SYSHTTP_PREFIX"):
-        HTTPEnv(environ={"SYSHTTP_PREFIX": "1X"}).prefix
+        HTTPEnv(environ={"SYSHTTP_PREFIX": "A-B_"}).prefixes
     with pytest.raises(ValueError) as caught:
-        HTTPEnv("1X")
+        HTTPEnv("A-B_")
     assert not isinstance(caught.value, SysHTTPError)
 
 

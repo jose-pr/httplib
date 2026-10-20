@@ -166,10 +166,29 @@ def test_a_per_request_verify_beside_the_callers_context_is_refused(mtls_server,
         session.get(mtls_server, verify=verify, timeout=5)
 
 
-def test_a_bundle_from_the_environment_is_not_a_per_request_verify(mtls_server, monkeypatch):
-    monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(DATA / "ca.pem"))
+@pytest.mark.parametrize("variable", ["CA_BUNDLE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"])
+def test_a_bundle_from_the_environment_is_not_a_per_request_verify(mtls_server, monkeypatch, variable):
+    monkeypatch.setenv(variable, str(DATA / "ca.pem"))
     resp = new_session(retries=0, ssl_context=_client()).get(mtls_server, timeout=5)
     assert resp.status_code == 200
+
+
+def test_ca_bundle_is_read_through_the_prefixes_and_requests_own_variables_are_not(monkeypatch):
+    from syshttp import HTTPEnv
+
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", "/requests.pem")
+    monkeypatch.setenv("CURL_CA_BUNDLE", "/curl.pem")
+
+    def verify(session, asked=True):
+        return session.merge_environment_settings("https://h/", {}, None, asked, None)["verify"]
+
+    assert verify(new_session()) is True
+    environ = {"APP_CA_BUNDLE": "/app.pem", "CA_BUNDLE": "/default.pem"}
+    assert verify(new_session(env=HTTPEnv("APP_:", environ=environ))) == "/app.pem"
+    assert verify(new_session(env=HTTPEnv(environ=environ))) == "/default.pem"
+    assert verify(new_session(env=HTTPEnv(environ=environ)), asked=False) is False
+    assert verify(new_session(env=HTTPEnv(environ=environ)), asked="/mine.pem") == "/mine.pem"
+    assert verify(new_session(env=HTTPEnv(environ=environ), verify="/session.pem"), asked=None) == "/session.pem"
 
 
 def test_the_fetch_helpers_refuse_a_verify_beside_the_callers_context(mtls_server):

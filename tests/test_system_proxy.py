@@ -85,7 +85,7 @@ def test_system_proxy_switch(system, monkeypatch):
     monkeypatch.setenv("SYSHTTP_SYSTEM_PROXY", "maybe")
     with pytest.raises(ValueError, match="SYSHTTP_SYSTEM_PROXY"):
         _answer("https://a.example/")
-    assert proxy.system_proxy_enabled(env=HTTPEnv("MYTOOL", environ={"MYTOOL_SYSTEM_PROXY": "0"})) is False
+    assert proxy.system_proxy_enabled(env=HTTPEnv("MYTOOL_", environ={"MYTOOL_SYSHTTP_SYSTEM_PROXY": "0"})) is False
 
 
 def test_the_system_map_is_read_once_then_renewed_and_its_failures_are_direct(monkeypatch):
