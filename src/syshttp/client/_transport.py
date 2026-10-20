@@ -5,6 +5,7 @@ from __future__ import annotations
 import errno as _errno
 import http.client as _client
 import logging as _logging
+import os as _os
 import select as _select
 import socket as _socket
 import ssl as _ssl
@@ -12,10 +13,16 @@ import threading as _threading
 import time as _time
 import typing as _ty
 
-from . import _pool
+import proxylib
+
+from .. import proxy as _proxy
+from ..env import HTTPEnv
+from . import _pool, _route
 from ._body import prepare_body
+from ._context import TLSChoice
 from ._headers import (
     Target,
+    bracket,
     check_body,
     check_headers,
     check_method,
@@ -24,6 +31,7 @@ from ._headers import (
     wants_decoding,
 )
 from ._response import HTTPResponse
+from ._tlstunnel import TunneledTLS
 
 _log = _logging.getLogger(__name__)
 
@@ -59,31 +67,6 @@ been dropped by the server, and the request would be lost with it."""
 _IDEMPOTENT = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE", "PROPFIND"})
 
 _now = _time.monotonic
-
-_DEFAULT_CONTEXT: "_ssl.SSLContext | None" = None
-_UNVERIFIED_CONTEXT: "_ssl.SSLContext | None" = None
-_DEFAULT_CONTEXT_LOCK = _threading.Lock()
-
-
-def _default_context() -> "_ssl.SSLContext":
-    """One verifying context for every transport that is not given its own."""
-    global _DEFAULT_CONTEXT
-    with _DEFAULT_CONTEXT_LOCK:
-        if _DEFAULT_CONTEXT is None:
-            _DEFAULT_CONTEXT = _ssl.create_default_context()
-        return _DEFAULT_CONTEXT
-
-
-def _unverified_context() -> "_ssl.SSLContext":
-    """One context that accepts any certificate, for `verify=False`."""
-    global _UNVERIFIED_CONTEXT
-    with _DEFAULT_CONTEXT_LOCK:
-        if _UNVERIFIED_CONTEXT is None:
-            context = _ssl.create_default_context()
-            context.check_hostname = False
-            context.verify_mode = _ssl.CERT_NONE
-            _UNVERIFIED_CONTEXT = context
-        return _UNVERIFIED_CONTEXT
 
 
 def _failure(error: BaseException) -> BaseException:
@@ -258,19 +241,47 @@ class _Body:
         self._abort()
 
 
+class _Route(_ty.NamedTuple):
+    """Where a request is sent and how it is written for the first server it
+    reaches."""
+
+    wire: Target  # the server written for: the origin, or a gateway
+    proxy: "proxylib.Proxy | None"  # the http or https proxy it passes through
+    gateway: "proxylib.Proxy | None"  # the URL-prefix gateway it is handed to
+    key: tuple  # what a pooled connection is keyed by
+
+
 class HTTPTransport:
     """Sends HTTP requests on the standard library: `http.client` over a socket,
     with TLS from `ssl`, and no third-party code.
 
     `send()` makes exactly one request: it follows no redirect, adds no
-    credentials and retries only as described below. A transport is a context
-    manager, and `close()` closes every connection it holds.
+    credentials of the caller's and retries only as described below. A
+    transport is a context manager, and `close()` closes every connection it
+    holds.
 
-    `https:` servers are verified against `ssl_context`; without one, against
-    `ssl.create_default_context()` (the system trust store). `verify=False`
-    is the one way to turn verification off, and `ssl_context` wins over it.
+    **Routing.** Each request asks `proxymap` (a proxylib proxy map; default
+    `proxy.proxy_map(env=env)`: `SYSHTTP_PROXY`, the `*_PROXY` variables,
+    `NO_PROXY`, then the system's configuration) which entries it may use, and
+    takes the first that accepts a connection (`proxylib.Probed`; with no entry
+    reachable and no direct one, `proxylib.NoReachableProxyError`). A direct
+    entry connects to the origin. An `http:` or `https:` proxy gets an
+    absolute-form request for an `http:` origin and a `CONNECT` for an `https:`
+    one; its headers (a credential) go to it alone, in the `CONNECT` or on the
+    plain-http request, never through the tunnel. A `prefix+http(s)` gateway is
+    asked for `<gateway><path><URL>` with its credential as a header of that
+    request, and the response keeps the URL asked for. SOCKS entries are not
+    spoken (`proxylib.UnsupportedProxyError` when nothing else is offered). A
+    map with no opinion for a URL, `{}` included, means a direct connection.
 
-    Each thread keeps one idle connection per server (at most 8), which a later
+    **TLS.** `https:` origins are verified against `ssl_context` when given,
+    else the CA bundle named by the `CA_BUNDLE` setting, else the system's
+    context (`tls.os_ssl_context()`). `verify=False` is the one way to turn
+    verification off, `verify=<path>` names a bundle, and an `ssl_context`
+    beside either is `ValueError`. An `https:` proxy or gateway is spoken to
+    with `proxy_ssl_context`, else the system's context.
+
+    Each thread keeps one idle connection per route (at most 8), which a later
     request reuses unless the server has closed it or sent bytes on it since;
     the connections of a thread are closed when it ends. A
     request that fails before any response byte on a reused connection because
@@ -282,18 +293,27 @@ class HTTPTransport:
     def __init__(
         self,
         *,
+        proxymap: "_ty.Any" = None,
+        env: "HTTPEnv | None" = None,
         ssl_context: "_ssl.SSLContext | None" = None,
-        verify: bool = True,
+        proxy_ssl_context: "_ssl.SSLContext | None" = None,
+        verify: "bool | str | _os.PathLike[str]" = True,
     ):
-        self._ssl_context = ssl_context
-        self._verify = bool(verify)
-        if not self._verify and ssl_context is None:
+        self._env = HTTPEnv() if env is None else env
+        self._tls = TLSChoice(self._env, ssl_context, proxy_ssl_context, verify)
+        if proxymap is None:
+            # Decided at every request; a malformed setting is refused now.
+            _proxy.configured_proxy(env=self._env)
+            self._proxymap: "_ty.Any" = _proxy.proxy_map(env=self._env)
+        else:
+            self._proxymap = _ty.cast(_ty.Any, proxylib.ProxyMap)(proxymap)
+        if self._tls.unverified:
             _log.warning("HTTPTransport(verify=False): TLS certificates are not verified")
         self._pool = _pool.Pool()
         self._finalizer = _pool.finalize_with(self, self._pool)
 
     def __repr__(self) -> str:
-        return f"HTTPTransport(verify={self._verify})"
+        return f"HTTPTransport(verify={not self._tls.unverified})"
 
     def __enter__(self) -> "HTTPTransport":
         return self
@@ -305,11 +325,6 @@ class HTTPTransport:
         """Closes every connection, idle or in use. Harmless when called again;
         a later request connects afresh."""
         self._pool.close()
-
-    def _context(self) -> "_ssl.SSLContext":
-        if self._ssl_context is not None:
-            return self._ssl_context
-        return _default_context() if self._verify else _unverified_context()
 
     def send(
         self,
@@ -335,7 +350,10 @@ class HTTPTransport:
         Raises `ValueError` before anything is sent for a header or URL with
         a control character, a URL with credentials or another scheme;
         `TimeoutError`, `ConnectionError` and `ssl.SSLError` for the network;
-        `OSError(EIO)` for a reply that is not valid HTTP or ends early."""
+        `OSError(EIO)` for a reply that is not valid HTTP or ends early. The
+        route adds `proxylib.NoReachableProxyError`,
+        `proxylib.UnsupportedProxyError` and, for a setting that cannot be used,
+        `ConfigurationError`."""
         method = check_method(method)
         target = check_url(url)
         pairs = check_headers(headers)
@@ -345,15 +363,37 @@ class HTTPTransport:
         decode = wants_decoding(pairs)
         # As the server will see it: no fragment, "/" for an empty path.
         plain_url = f"{target.scheme}://{target.authority}{target.path}"
+        scope = _pool.scope_id()
+        route = self._route(target, plain_url, connect_timeout, scope)
         response = self._attempt(
-            method, target, pairs, names, payload, connect_timeout, read_timeout, plain_url, decode
+            route, method, pairs, names, payload, connect_timeout, read_timeout, plain_url, decode, scope
         )
         return response if stream else response._buffered()
 
+    def _plan(self, entry: "proxylib.Proxy | None", target: Target, plain_url: str) -> _Route:
+        if entry is None:
+            return _Route(target, None, None, (target.scheme, target.host, target.port, None))
+        if entry.is_gateway:
+            wire = check_url(entry.gateway_url(plain_url))
+            return _Route(wire, None, entry, ("gateway", wire.scheme, wire.host, wire.port))
+        peer = (entry.scheme, entry.host, _route.port(entry))
+        return _Route(target, entry, None, (target.scheme, target.host, target.port, peer))
+
+    def _route(self, target: Target, plain_url: str, connect_timeout, scope: int) -> _Route:
+        """The route of a request: the first entry the proxy map answers whose
+        proxy accepts a connection. One this thread already holds a connection
+        to is known to answer, and is not probed again."""
+        entries = _route.entries(self._proxymap, plain_url)
+        first = self._plan(entries[0], target, plain_url)
+        if entries[0] is None or self._pool.has_idle(first.key, scope):
+            return first
+        chosen = _route.reachable(entries, plain_url, connect_timeout)
+        return first if chosen == entries[0] else self._plan(chosen, target, plain_url)
+
     def _attempt(
         self,
+        route: _Route,
         method: str,
-        target: Target,
         pairs,
         names,
         payload: _Payload,
@@ -361,11 +401,10 @@ class HTTPTransport:
         read_timeout,
         url: str,
         decode: bool,
+        scope: int,
     ) -> HTTPResponse:
-        key = (target.scheme, target.host, target.port)
         repeatable = method in _IDEMPOTENT and payload.repeatable
-        scope = _pool.scope_id()
-        connection = self._pool.take(key, scope)
+        connection = self._pool.take(route.key, scope)
         if connection is not None and not repeatable and _now() - connection.released_at > REUSE_WINDOW:
             self._pool.discard(connection)
             connection = None
@@ -375,7 +414,7 @@ class HTTPTransport:
         reused = connection is not None
         while True:
             if connection is None:
-                connection = self._open(target, key, scope, connect_timeout, read_timeout)
+                connection = self._open(route, scope, connect_timeout, read_timeout)
                 reused = False
             sock = connection.http.sock
             try:
@@ -390,53 +429,36 @@ class HTTPTransport:
                 connection, reused = None, False
                 continue
             try:
-                return self._exchange(
-                    connection,
-                    method,
-                    target,
-                    pairs,
-                    names,
-                    payload,
-                    url,
-                    decode,
-                    reused,
-                )
+                return self._exchange(connection, route, method, pairs, names, payload, url, decode, reused)
             except _Dropped as dropped:
                 if reused and repeatable:
                     connection, reused = None, False
                     continue
                 raise dropped.error from None
 
-    def _headers(self, target: Target, pairs, names, payload) -> "dict[str, str]":
+    def _headers(self, route: _Route, pairs, names, payload) -> "dict[str, str]":
         sent = dict(pairs)
         if payload.length is not None:
             sent["Content-Length"] = str(payload.length)
         if "host" not in names:
-            sent["Host"] = target.authority
+            sent["Host"] = route.wire.authority
         if "accept-encoding" not in names:
             sent["Accept-Encoding"] = "gzip, deflate"
+        # What a proxy or gateway is given for itself rides on a request it
+        # reads: not on one inside a tunnel.
+        owner = route.gateway or (route.proxy if route.wire.scheme == "http" else None)
+        if owner is not None:
+            for name, value in _route.credentials(owner):
+                if name.lower() not in names:
+                    sent[name] = value
         return sent
 
-    def _exchange(
-        self,
-        connection,
-        method,
-        target,
-        pairs,
-        names,
-        payload,
-        url,
-        decode,
-        reused,
-    ) -> HTTPResponse:
+    def _exchange(self, connection, route: _Route, method, pairs, names, payload, url, decode, reused) -> HTTPResponse:
         http = connection.http
+        wire = route.wire
+        line = f"http://{wire.authority}{wire.path}" if route.proxy is not None and wire.scheme == "http" else wire.path
         try:
-            http.request(
-                method,
-                target.path,
-                body=payload.value,
-                headers=self._headers(target, pairs, names, payload),
-            )
+            http.request(method, line, body=payload.value, headers=self._headers(route, pairs, names, payload))
             response = http.getresponse()
         except (OSError, _client.HTTPException) as error:
             self._pool.discard(connection)
@@ -450,30 +472,73 @@ class HTTPTransport:
         body = _Body(self, self._pool, connection, response, response.length)
         return HTTPResponse(response.status, response.reason, headers, url, body, decode=decode)
 
-    def _open(self, target, key, scope, connect_timeout, read_timeout):
+    def _open(self, route: _Route, scope: int, connect_timeout, read_timeout):
+        proxy, wire = route.proxy, route.wire
+        host, port = (proxy.host, _route.port(proxy)) if proxy is not None else (wire.host, wire.port)
         try:
-            raw = _socket.create_connection((target.host, target.port), timeout=connect_timeout)
+            raw = _socket.create_connection((host, port), timeout=connect_timeout)
         except (OSError, _client.HTTPException) as error:
             raise _failure(error) from None
-        sock = raw
+        sock: _ty.Any = raw
         try:
             raw.setsockopt(_socket.IPPROTO_TCP, _socket.TCP_NODELAY, 1)
-            if target.scheme == "https":
-                sock = self._context().wrap_socket(raw, server_hostname=target.host)
+            sock = self._layers(raw, route)
             sock.settimeout(read_timeout)
         except (OSError, _client.HTTPException) as error:
-            raw.close()
+            sock.close()
             raise _failure(error) from None
         except BaseException:
-            raw.close()
+            sock.close()
             raise
-        http = _client.HTTPConnection(target.host, target.port)
+        http = _client.HTTPConnection(wire.host, wire.port)
         # A connection that was closed stays closed: `http.client` would
         # otherwise reconnect by itself, in plain TCP, outside the TLS session,
         # the proxy and the timeout this request was given.
         http.auto_open = 0
         http.response_class = _Reply
         http.sock = sock
-        connection = _pool.Connection(http, key, scope, self._pool.generation)
+        connection = _pool.Connection(http, route.key, scope, self._pool.generation)
         self._pool.register(connection)
         return connection
+
+    def _layers(self, raw, route: _Route):
+        """`raw`, connected to the first server of `route`, with the tunnel and
+        the TLS the route needs on it. What it made is closed when a step fails."""
+        proxy, wire = route.proxy, route.wire
+        sock: _ty.Any = raw
+        try:
+            if proxy is not None and proxy.scheme == "https":
+                sock = self._tls.proxy().wrap_socket(raw, server_hostname=proxy.host)
+            if proxy is not None and wire.scheme == "https":
+                self._tunnel(sock, wire, proxy)
+                if proxy.scheme == "https":
+                    # The origin's TLS cannot be wrapped around another TLS socket.
+                    sock = TunneledTLS(sock, self._tls.origin(), wire.host)
+                else:
+                    sock = self._tls.origin().wrap_socket(sock, server_hostname=wire.host)
+            elif route.gateway is not None:
+                if wire.scheme == "https":
+                    sock = self._tls.proxy().wrap_socket(raw, server_hostname=wire.host)
+            elif wire.scheme == "https":
+                sock = self._tls.origin().wrap_socket(raw, server_hostname=wire.host)
+            return sock
+        except BaseException:
+            sock.close()
+            raise
+
+    @staticmethod
+    def _tunnel(sock, target: Target, proxy: "proxylib.Proxy") -> None:
+        """Asks the proxy to connect `sock` to the server (RFC 9110 9.3.6). Only
+        what the proxy is configured with goes in the request."""
+        authority = f"{bracket(target.host)}:{target.port}"
+        lines = [f"CONNECT {authority} HTTP/1.1", f"Host: {authority}"]
+        lines += [f"{name}: {value}" for name, value in _route.credentials(proxy)]
+        sock.sendall(("\r\n".join(lines) + "\r\n\r\n").encode("ascii"))
+        reply = _client.HTTPResponse(sock, method="CONNECT")
+        try:
+            reply.begin()
+            status = reply.status
+        finally:
+            reply.close()
+        if not 200 <= status < 300:
+            raise ConnectionRefusedError(_errno.ECONNREFUSED, f"the proxy refused CONNECT (HTTP {status})")

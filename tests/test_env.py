@@ -154,15 +154,16 @@ def test_hooks_are_read_under_every_prefix_the_first_winning_per_variable():
     ]
 
 
-def test_session_reads_through_its_env(monkeypatch):
-    pytest.importorskip("requests")
-    from syshttp.session import new_session
+def test_the_client_reads_through_its_env(monkeypatch):
+    from client_wire import Proxy
+    from syshttp.client import HTTPClient
 
-    monkeypatch.setenv("SYSHTTP_PROXY", "http://ignored:1")
-    environ = {"MYTOOL_SYSHTTP_PROXY": "http://mytool:3128", "MYTOOL_SYSHTTP_PROXY_AUTH": "Bearer t"}
-    adapter = new_session(env=HTTPEnv("MYTOOL_", environ=environ)).get_adapter("https://api.example.com/")
-    (entry,) = adapter.route("https://api.example.com/")
-    assert (entry.url, entry.headers) == ("http://mytool:3128", {"Proxy-Authorization": "Bearer t"})
+    with Proxy() as proxy:
+        monkeypatch.setenv("SYSHTTP_PROXY", "http://ignored:1")
+        environ = {"MYTOOL_SYSHTTP_PROXY": proxy.url, "MYTOOL_SYSHTTP_PROXY_AUTH": "Bearer t"}
+        with HTTPClient(env=HTTPEnv("MYTOOL_", environ=environ)) as client:
+            assert client.request("GET", "http://api.example.com/", timeout=5).text() == "via proxy"
+    assert proxy.requests[0].header("Proxy-Authorization") == "Bearer t"
 
 
 def test_importing_reads_no_variable():
@@ -171,7 +172,7 @@ def test_importing_reads_no_variable():
     code = (
         "import sys; sys.path.insert(0, %r); "
         "import syshttp, syshttp.env, syshttp.proxy, syshttp.jar, syshttp.hooks, syshttp.cookies, "
-        "syshttp.tls, syshttp.retry, syshttp.session, syshttp.fetch; print('ok')" % str(SRC)
+        "syshttp.tls, syshttp.retry, syshttp.client, syshttp.session, syshttp.fetch; print('ok')" % str(SRC)
     )
     run = subprocess.run(
         [sys.executable, "-c", code],

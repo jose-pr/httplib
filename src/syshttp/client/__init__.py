@@ -17,6 +17,8 @@ import types as _types
 
 from . import _settings
 from ._client import DEFAULT_TIMEOUT, HTTPClient
+from ._context import CA_BUNDLE
+from ._default import DEFAULT_TRANSPORT
 from ._follow import is_redirect, split_userinfo
 from ._headers import Headers, peer_text
 from ._prepare import PreparedRequest, prepare_request
@@ -25,7 +27,9 @@ from ._status import HTTPStatusError, drop_body, json_body, raise_for_status, re
 from ._transport import HTTPTransport, Transport
 
 __all__ = [
+    "CA_BUNDLE",
     "DEFAULT_TIMEOUT",
+    "DEFAULT_TRANSPORT",
     "HTTPClient",
     "HTTPResponse",
     "HTTPStatusError",

@@ -11,6 +11,7 @@ import pytest
 
 from client_wire import Wire, loopback_authority, response
 from syshttp.client import HTTPTransport
+from syshttp.exceptions import SysHTTPError
 
 TIMEOUT = (5, 5)
 
@@ -55,13 +56,10 @@ def test_verify_false_accepts_any_certificate(secure):
     assert len(secure.requests) == 1
 
 
-def test_an_ssl_context_wins_over_verify_false(secure):
-    # A context that trusts nothing relevant still verifies.
-    context = ssl.create_default_context()
-    with HTTPTransport(ssl_context=context, verify=False) as transport:
-        with pytest.raises(ssl.SSLCertVerificationError):
-            get(transport, secure.url + "/")
-    assert secure.requests == []
+def test_an_ssl_context_beside_verify_false_is_a_contradiction():
+    with pytest.raises(ValueError, match="ssl_context") as caught:
+        HTTPTransport(ssl_context=ssl.create_default_context(), verify=False)
+    assert not isinstance(caught.value, SysHTTPError)
 
 
 def test_a_server_that_does_not_speak_tls_is_an_ssl_error(authority):
@@ -126,11 +124,4 @@ def test_building_with_verification_on_logs_nothing(caplog):
     with caplog.at_level(logging.DEBUG, logger="syshttp"):
         HTTPTransport().close()
         HTTPTransport(verify=True).close()
-    assert _warnings(caplog) == []
-
-
-def test_a_context_the_caller_gave_wins_over_verify_and_logs_nothing(caplog):
-    context = ssl.create_default_context()
-    with caplog.at_level(logging.DEBUG, logger="syshttp"):
-        HTTPTransport(ssl_context=context, verify=False).close()
     assert _warnings(caplog) == []

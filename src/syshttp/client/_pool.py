@@ -99,6 +99,11 @@ class Pool:
             idle = self._idle.get(scope)
             return idle.pop(key, None) if idle else None
 
+    def has_idle(self, key: tuple, scope: int) -> bool:
+        """Whether the calling thread has an idle connection to `key`."""
+        with self._lock:
+            return key in self._idle.get(scope, ())
+
     def register(self, connection: Connection) -> None:
         with self._lock:
             self._open.add(connection)

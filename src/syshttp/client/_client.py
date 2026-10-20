@@ -3,15 +3,18 @@ and the redirect rules above the transport."""
 
 from __future__ import annotations
 
+import os as _os
+import ssl as _ssl
 import threading as _threading
 import typing as _ty
 
 from .. import __version__
+from ..env import HTTPEnv
 from . import _follow, _settings
 from ._deadline import Deadline, check_deadline
 from ._headers import check_headers, check_url, has_header, merge_headers
+from ._default import transport_source
 from ._response import HTTPResponse, too_large
-from ._transport import HTTPTransport
 
 DEFAULT_TIMEOUT = (10, 60)
 """`(connect, read)` timeout, in seconds, a client sends with every request
@@ -27,9 +30,13 @@ class HTTPClient:
     for what happens after a redirect.
 
     `transport` is any object with a `send()` method as `HTTPTransport.send()`;
-    without one the client builds an `HTTPTransport` on first use and
-    closes it with `close()` or at the end of a `with` block. A transport it
-    was given stays the caller's. `headers` are sent with every request,
+    one it is given stays the caller's. Without one the client builds the
+    transport the `SYSHTTP_DEFAULT_TRANSPORT` setting names, else an
+    `HTTPTransport`, when it is made, and closes it with `close()` or at the
+    end of a `with` block. `proxymap`, `ssl_context`, `proxy_ssl_context` and
+    `verify` configure that `HTTPTransport` and are `ValueError` beside a
+    transport of your own; `env` (default `HTTPEnv()`) is where the client and
+    its transport read their settings. `headers` are sent with every request,
     request-specific headers merged over them by name, over a `User-Agent` of
     `user_agent` (`syshttp/<version>` by default) and `Accept: */*`.
     Every request gets `timeout=DEFAULT_TIMEOUT` (`(10, 60)` seconds) unless
@@ -48,17 +55,6 @@ class HTTPClient:
     body, and any other 3xx, a redirect to another origin or a second redirect
     raises `OSError(EIO)`."""
 
-    __slots__ = (
-        "headers",
-        "timeout",
-        "deadline",
-        "user_agent",
-        "_transport",
-        "_built",
-        "_transport_lock",
-        "__weakref__",
-    )
-
     def __init__(
         self,
         transport: "_ty.Any" = None,
@@ -67,12 +63,33 @@ class HTTPClient:
         timeout: "float | tuple | None" = DEFAULT_TIMEOUT,
         deadline: "float | None" = None,
         user_agent: "str | None" = None,
+        env: "HTTPEnv | None" = None,
+        proxymap: "_ty.Any" = None,
+        ssl_context: "_ssl.SSLContext | None" = None,
+        proxy_ssl_context: "_ssl.SSLContext | None" = None,
+        verify: "bool | str | _os.PathLike[str]" = True,
     ):
         if transport is not None and not callable(getattr(transport, "send", None)):
             raise TypeError("a transport is an object with a send() method")
+        self._env = HTTPEnv() if env is None else env
+        options = {
+            "proxymap": proxymap,
+            "ssl_context": ssl_context,
+            "proxy_ssl_context": proxy_ssl_context,
+            "verify": verify,
+        }
         self._transport = transport
         self._built = None
         self._transport_lock = _threading.Lock()
+        if transport is not None:
+            if any(value is not (True if name == "verify" else None) for name, value in options.items()):
+                raise ValueError(
+                    "proxymap, ssl_context, proxy_ssl_context and verify configure the default transport: "
+                    "a client given a transport leaves them to it"
+                )
+        else:
+            self._make, self._owned = transport_source(self._env, options)
+            self.transport  # made now, so a setting that cannot be used is refused now
         self.headers = dict(headers or {})
         self.timeout = timeout
         self.deadline = check_deadline(deadline)
@@ -84,13 +101,15 @@ class HTTPClient:
 
     @property
     def transport(self):
-        """The transport: the one the client was given, or one built on first
-        use. Read once per request."""
+        """The transport: the one the client was given, or the one it made
+        (again, after `close()`). Read once per request."""
         transport = self._transport
         if transport is None:
             with self._transport_lock:
                 if self._transport is None:
-                    self._built = self._transport = HTTPTransport()
+                    self._transport = self._make()
+                    if self._owned:
+                        self._built = self._transport
                 transport = self._transport
         return transport
 

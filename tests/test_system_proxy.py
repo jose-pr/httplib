@@ -1,7 +1,7 @@
 """The system's proxy configuration as the last source: after <P>_PROXY and
 the *_PROXY variables, per URL, NO_PROXY first, switched off by
 <P>_SYSTEM_PROXY=0, never a failed request when it cannot be read; its list
-tried in order by the session, and probed for a client that sends once."""
+tried in order by the client, and probed for a client that sends once."""
 
 import proxylib
 import pytest
@@ -157,9 +157,15 @@ def _dead_port():
     return port
 
 
-def test_one_session_routes_each_url_by_the_systems_answer(system, monkeypatch):
-    pytest.importorskip("requests")
-    from syshttp.session import new_session
+def _get(url):
+    from syshttp.client import HTTPClient
+
+    with HTTPClient() as client:
+        return client.request("GET", url, timeout=5).text()
+
+
+def test_one_client_routes_each_url_by_the_systems_answer(system, monkeypatch):
+    from syshttp.client import HTTPClient
 
     seen = []
     a, b = _answering_proxy("proxy-a", seen), _answering_proxy("proxy-b", seen)
@@ -171,9 +177,9 @@ def test_one_session_routes_each_url_by_the_systems_answer(system, monkeypatch):
             }
         )
         monkeypatch.setenv("HTTP_PROXY_AUTH", "Bearer t")
-        session = new_session(retries=0)
-        assert session.get("http://a.example/x", timeout=5).text == "proxy-a"
-        assert session.get("http://b.example/y", timeout=5).text == "proxy-b"
+        with HTTPClient() as client:
+            assert client.request("GET", "http://a.example/x", timeout=5).text() == "proxy-a"
+            assert client.request("GET", "http://b.example/y", timeout=5).text() == "proxy-b"
         assert seen == [("proxy-a", "http://a.example/x", "Bearer t"), ("proxy-b", "http://b.example/y", "Bearer t")]
     finally:
         for httpd in (a, b):
@@ -182,46 +188,37 @@ def test_one_session_routes_each_url_by_the_systems_answer(system, monkeypatch):
 
 
 def test_the_credential_reaches_a_proxy_named_in_upper_case(monkeypatch):
-    pytest.importorskip("requests")
-    from syshttp.session import new_session
-
     seen = []
     p = _answering_proxy("proxy", seen)
     try:
         monkeypatch.setenv("SYSHTTP_PROXY", "http://LOCALHOST:%d" % p.server_address[1])
         monkeypatch.setenv("SYSHTTP_PROXY_AUTH", "Bearer t")
-        assert new_session(retries=0).get("http://origin.example/", timeout=5).text == "proxy"
+        assert _get("http://origin.example/") == "proxy"
         assert seen[-1][2] == "Bearer t"
     finally:
         p.shutdown()
         p.server_close()
 
 
-def test_the_session_fails_over_to_the_next_proxy_of_the_list(system):
-    pytest.importorskip("requests")
-    from syshttp.session import new_session
-
+def test_the_client_fails_over_to_the_next_proxy_of_the_list(system):
     seen = []
     live = _answering_proxy("live", seen)
     try:
         dead = _dead_port()
         system.routes["a.example"] = "PROXY 127.0.0.1:%d; PROXY 127.0.0.1:%d" % (dead, live.server_address[1])
-        assert new_session(retries=0).get("http://a.example/x", timeout=5).text == "live"
+        assert _get("http://a.example/x") == "live"
     finally:
         live.shutdown()
         live.server_close()
 
 
-def test_the_session_goes_direct_when_direct_follows_a_dead_proxy(system):
-    pytest.importorskip("requests")
-    from syshttp.session import new_session
-
+def test_the_client_goes_direct_when_direct_follows_a_dead_proxy(system):
     seen = []
     origin = _answering_proxy("origin", seen)
     try:
         host = "127.0.0.1:%d" % origin.server_address[1]
         system.routes[host] = "PROXY 127.0.0.1:%d; DIRECT" % _dead_port()
-        assert new_session(retries=0).get("http://%s/x" % host, timeout=5).text == "origin"
+        assert _get("http://%s/x" % host) == "origin"
         assert seen == [("origin", "/x", None)]
     finally:
         origin.shutdown()
@@ -229,12 +226,9 @@ def test_the_session_goes_direct_when_direct_follows_a_dead_proxy(system):
 
 
 def test_no_reachable_proxy_and_no_direct_is_an_error(system):
-    requests = pytest.importorskip("requests")
-    from syshttp.session import new_session
-
     dead = _dead_port()
     system.routes["a.example"] = "PROXY 127.0.0.1:%d" % dead
-    with pytest.raises(requests.exceptions.ProxyError, match="127.0.0.1"):
-        new_session(retries=0).get("http://a.example/", timeout=5)
+    with pytest.raises(proxy.NoReachableProxyError):
+        _get("http://a.example/")
     with pytest.raises(proxy.NoReachableProxyError):
         proxylib.lookup(proxylib.Probed(proxy.proxy_map(), timeout=1.0), "http://a.example/")

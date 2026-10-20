@@ -76,13 +76,16 @@ def test_a_body_that_is_not_json_is_a_response_error():
 
 
 def test_a_callers_contradictory_options_are_plain_value_errors():
-    pytest.importorskip("requests")
     import ssl
 
-    from syshttp.session import new_session
+    from client_fakes import FakeTransport
+    from syshttp.client import HTTPClient
 
     with pytest.raises(ValueError) as caught:
-        new_session(ssl_context=ssl.create_default_context(), verify=False)
+        HTTPClient(ssl_context=ssl.create_default_context(), verify=False)
+    assert not isinstance(caught.value, SysHTTPError)
+    with pytest.raises(ValueError) as caught:
+        HTTPClient(FakeTransport(), verify=False)
     assert not isinstance(caught.value, SysHTTPError)
 
 
@@ -96,14 +99,13 @@ def test_a_token_with_a_line_break_is_a_configuration_error():
         session.get("http://127.0.0.1:9/")
 
 
-def test_building_a_session_changes_no_process_wide_warning_filter():
-    pytest.importorskip("requests")
+def test_building_a_client_changes_no_process_wide_warning_filter():
     import warnings
 
-    from syshttp.session import new_session
+    from syshttp.client import HTTPClient
 
     before = list(warnings.filters)
-    new_session(verify=False, env=HTTPEnv(environ={}))
+    HTTPClient(verify=False, env=HTTPEnv(environ={})).close()
     assert list(warnings.filters) == before
 
 

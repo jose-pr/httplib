@@ -1,24 +1,18 @@
-"""The session's riskier network paths, over loopback: an https origin through
-a real CONNECT tunnel, an https:// proxy that demands a client certificate, a
-redirect to another host that must not carry the token, and the message when
-requests is not installed."""
+"""The client's riskier network paths, over loopback: an https origin through
+a real CONNECT tunnel, and through an https:// proxy that demands a client
+certificate (the origin's TLS runs inside the proxy's)."""
 
 import select
 import socket
 import socketserver
 import ssl
-import sys
 import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-pytest.importorskip("requests")
-
+from syshttp.client import HTTPClient  # noqa: E402
 from syshttp.env import HTTPEnv  # noqa: E402
-from syshttp.jar import MemoryTokenJar  # noqa: E402
-from syshttp.session import new_session  # noqa: E402
-from test_ssl_context import DATA, _client, mtls_server  # noqa: E402,F401  (fixture reused)
+from test_client_tls import DATA, _client, mtls_server  # noqa: E402,F401  (fixture reused)
 
 BEARER = "Bearer s3cret"
 
@@ -94,18 +88,18 @@ def tunnel():
 
 def test_an_https_origin_is_reached_through_a_connect_tunnel_with_the_credential(mtls_server, tunnel):  # noqa: F811
     env = HTTPEnv(environ={"SYSHTTP_PROXY": tunnel.url, "SYSHTTP_PROXY_AUTH": BEARER})
-    response = new_session(retries=0, ssl_context=_client(), env=env).get(mtls_server, timeout=10)
-    assert response.text.split()[0] == "client-rsa", "the origin saw the client identity through the tunnel"
+    with HTTPClient(ssl_context=_client(), env=env) as client:
+        response = client.request("GET", mtls_server, timeout=10)
+    assert response.text().split()[0] == "client-rsa", "the origin saw the client identity through the tunnel"
     origin = mtls_server.split("//")[1].rstrip("/")
     assert tunnel.seen == [("CONNECT", origin, BEARER)]
 
 
 def test_the_tunnel_refuses_a_request_without_the_credential(mtls_server, tunnel):  # noqa: F811
-    import requests
-
     env = HTTPEnv(environ={"SYSHTTP_PROXY": tunnel.url})
-    with pytest.raises(requests.exceptions.ProxyError):
-        new_session(retries=0, ssl_context=_client(), env=env).get(mtls_server, timeout=10)
+    with HTTPClient(ssl_context=_client(), env=env) as client:
+        with pytest.raises(ConnectionError, match="407"):
+            client.request("GET", mtls_server, timeout=10)
     assert tunnel.seen and tunnel.seen[0][2] is None
 
 
@@ -129,64 +123,13 @@ def secure_tunnel():
 
 
 def test_an_https_proxy_is_spoken_to_with_the_proxy_context(mtls_server, secure_tunnel):  # noqa: F811
-    import requests
-
     env = HTTPEnv(environ={"SYSHTTP_PROXY": secure_tunnel.url, "SYSHTTP_PROXY_AUTH": BEARER})
     origin = _client()
-    with new_session(retries=0, ssl_context=origin, proxy_ssl_context=_client(), env=env) as session:
-        ok = session.get(mtls_server, timeout=10)
-    assert ok.text.split()[0] == "client-rsa" and len(secure_tunnel.seen) == 1
-    with new_session(retries=0, ssl_context=origin, proxy_ssl_context=_client(identity=False), env=env) as session:
-        with pytest.raises(requests.exceptions.RequestException):
-            session.get(mtls_server, timeout=10)
-
-
-class _Hop(BaseHTTPRequestHandler):
-    redirect_to = None
-    seen = []
-
-    def do_GET(self):
-        type(self).seen.append(self.headers.get("Authorization"))
-        if type(self).redirect_to:
-            self.send_response(302)
-            self.send_header("Location", type(self).redirect_to)
-            self.send_header("Content-Length", "0")
-        else:
-            self.send_response(200)
-            self.send_header("Content-Length", "0")
-        self.end_headers()
-
-    def log_message(self, *args):
-        pass
-
-
-def _serve(handler):
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    return server
-
-
-def test_a_redirect_to_another_host_does_not_carry_the_token():
-    first = type("First", (_Hop,), {"seen": []})
-    last = type("Last", (_Hop,), {"seen": [], "redirect_to": None})
-    final, start = _serve(last), None
-    try:
-        first.redirect_to = "http://localhost:%d/final" % final.server_address[1]
-        start = _serve(first)
-        session = new_session(tokens=MemoryTokenJar({"127.0.0.1": "tok"}), retries=0, env=HTTPEnv(environ={}))
-        response = session.get("http://127.0.0.1:%d/" % start.server_address[1], timeout=10)
-        assert response.status_code == 200 and [r.status_code for r in response.history] == [302]
-        assert first.seen == ["Bearer tok"], "the origin the token is for gets it"
-        assert last.seen == [None], "the other host does not"
-    finally:
-        final.shutdown()
-        final.server_close()
-        if start is not None:
-            start.shutdown()
-            start.server_close()
-
-
-def test_without_requests_new_session_says_what_to_install(monkeypatch):
-    monkeypatch.setitem(sys.modules, "requests", None)
-    with pytest.raises(ImportError, match=r"pip install 'syshttp\[session\]'"):
-        new_session()
+    with HTTPClient(ssl_context=origin, proxy_ssl_context=_client(), env=env) as client:
+        ok = client.request("GET", mtls_server, timeout=10)
+        again = client.request("GET", mtls_server, timeout=10)
+    assert ok.text().split()[0] == "client-rsa" and again.status == 200
+    assert len(secure_tunnel.seen) == 1, "the second request used the tunnel it had"
+    with HTTPClient(ssl_context=origin, proxy_ssl_context=_client(identity=False), env=env) as client:
+        with pytest.raises((ssl.SSLError, ConnectionError)):
+            client.request("GET", mtls_server, timeout=10)

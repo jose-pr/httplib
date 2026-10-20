@@ -75,6 +75,7 @@ __all__ = (
     "curl_command",
     "hooks_from_env",
     "load_callable",
+    "load_object",
     "matching",
     "skipped",
     "split_command",
@@ -202,12 +203,14 @@ def _file_module(path: Path) -> Any:
     return module
 
 
-def load_callable(spec: str) -> "PyHook":
-    """``module:attr`` (importable) or ``<file>.py:attr``. ``attr`` may be dotted.
-    A file is loaded once per process, by its resolved path."""
+def load_object(spec: str, what: str = "an object") -> Any:
+    """The object ``module:attr`` (importable) or ``<file>.py:attr`` names;
+    ``attr`` may be dotted. A file is loaded once per process, by its resolved
+    path. A malformed ``spec`` is a ``ConfigurationError`` naming ``what``; a
+    module or attribute that is not there raises as the import does."""
     target, sep, attr = spec.rpartition(":")
     if not sep or not target or not attr:
-        raise ConfigurationError("a hook callable is written <module or file.py>:<callable>, not %r" % spec)
+        raise ConfigurationError("%s is written <module or file.py>:<name>, not %r" % (what, spec))
     if target.endswith(".py") and Path(target).is_file():
         module = _file_module(Path(target))
     else:
@@ -215,6 +218,13 @@ def load_callable(spec: str) -> "PyHook":
     obj: Any = module
     for part in attr.split("."):
         obj = getattr(obj, part)
+    return obj
+
+
+def load_callable(spec: str) -> "PyHook":
+    """``module:attr`` (importable) or ``<file>.py:attr``, which must be
+    callable (:func:`load_object`)."""
+    obj = load_object(spec, "a hook callable")
     if not callable(obj):
         raise ConfigurationError("%s is not callable" % spec)
     return obj

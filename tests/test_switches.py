@@ -26,22 +26,22 @@ def test_auth_header_name_defaults_and_validates(monkeypatch):
             agent_proxy.auth_header()
 
 
-def test_session_uses_the_configured_header_name(origin, gateway, monkeypatch):
-    pytest.importorskip("requests")
-    from syshttp.session import new_session
+def test_the_client_uses_the_configured_header_name(origin, gateway, monkeypatch):
+    from syshttp.client import HTTPClient
 
     monkeypatch.setenv("SYSHTTP_PROXY_AUTH_HEADER", "X-Proxy-Token")
-    session = new_session(retries=0)
-    # connect: the header the proxy entry carries to the proxy alone
-    monkeypatch.setenv("SYSHTTP_PROXY_TYPE", "connect")
-    adapter = session.get_adapter("https://api.example.com/")
-    (entry,) = adapter.route("https://api.example.com/")
-    assert entry.headers == {"X-Proxy-Token": BEARER}
-    monkeypatch.setenv("SYSHTTP_PROXY_TYPE", "prefix:/fetch/")
-    # prefix: a header of the gateway request
-    session.get(origin + "/x", timeout=5)
-    seen = _Gateway.seen[-1][1]
-    assert seen.get("X-Proxy-Token") == BEARER and "Proxy-Authorization" not in seen
+    with HTTPClient() as client:
+        # connect: the header goes to the proxy, on its plain-http request
+        monkeypatch.setenv("SYSHTTP_PROXY_TYPE", "connect")
+        client.request("GET", origin + "/x", timeout=5)
+        seen = _Gateway.seen[-1][1]
+        assert seen.get("X-Proxy-Token") == BEARER and "Proxy-Authorization" not in seen
+        # prefix: a header of the gateway request
+        monkeypatch.setenv("SYSHTTP_PROXY_TYPE", "prefix:/fetch/")
+        client.request("GET", origin + "/y", timeout=5)
+        path, seen = _Gateway.seen[-1]
+        assert path == "/fetch/" + origin + "/y"
+        assert seen.get("X-Proxy-Token") == BEARER and "Proxy-Authorization" not in seen
 
 
 def test_syshttp_typing_never_imports_requests_at_runtime():

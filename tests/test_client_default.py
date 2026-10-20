@@ -20,12 +20,25 @@ from syshttp.client import HTTPClient, HTTPTransport
 SRC = Path(__file__).resolve().parents[1] / "src"
 
 
-def test_without_a_transport_the_client_builds_an_http_transport_on_first_use_and_keeps_it():
+def test_without_a_transport_the_client_makes_an_http_transport_and_keeps_it():
     with HTTPClient() as client:
-        assert client._transport is None
         first = client.transport
         assert type(first) is HTTPTransport
         assert client.transport is first
+
+
+def test_a_closed_client_makes_a_new_transport_when_it_is_used_again():
+    client = HTTPClient()
+    first = client.transport
+    client.close()
+    assert client.transport is not first
+    client.close()
+
+
+@pytest.mark.parametrize("option", [{"proxymap": {}}, {"verify": False}, {"proxy_ssl_context": object()}])
+def test_the_options_of_the_default_transport_are_refused_beside_one_of_your_own(option):
+    with pytest.raises(ValueError, match="default transport"):
+        HTTPClient(FakeTransport(), **option)
 
 
 def test_a_client_closes_the_transport_it_built_and_not_one_it_was_given():

@@ -1,5 +1,5 @@
 """Proxy credentials, kind and bypass, end to end: syshttp.proxy and the
-requests session.
+client.
 
 No external network: a fake authenticating forward proxy, a fake prefix gateway
 and a plain target server run on 127.0.0.1. The proxy answers 407 without the
@@ -271,71 +271,65 @@ def test_noproxy_replaces_no_proxy(monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# requests session: same credential, same kind, same bypass
+# the client: same credential, same kind, same bypass
 # --------------------------------------------------------------------------
 
 
-def test_session_sends_the_configured_header_to_the_proxy(target, proxy, monkeypatch):
-    pytest.importorskip("requests")
-    from syshttp.session import new_session
+def _get(url, *, env=None, **options):
+    from syshttp.client import HTTPClient
 
+    with HTTPClient(env=env, **options) as client:
+        return client.request("GET", url, timeout=5)
+
+
+def test_the_client_sends_the_configured_header_to_the_proxy(target, proxy, monkeypatch):
     _Proxy.expected = BEARER
     monkeypatch.setenv("SYSHTTP_PROXY", "http://" + proxy)
     monkeypatch.setenv("SYSHTTP_PROXY_AUTH", BEARER)
-    resp = new_session(retries=0).get(target + "/x", timeout=5)
-    assert resp.status_code == 200 and resp.text == "via-proxy"
+    resp = _get(target + "/x")
+    assert resp.status == 200 and resp.text() == "via-proxy"
     assert _Proxy.seen[-1][1] == BEARER
 
 
-def test_session_url_userinfo_authenticates(target, proxy, monkeypatch):
-    pytest.importorskip("requests")
-    from syshttp.session import new_session
-
+def test_url_userinfo_authenticates_to_the_proxy(target, proxy, monkeypatch):
     monkeypatch.setenv("SYSHTTP_PROXY", "http://agent:s3cret@" + proxy)
-    resp = new_session(retries=0).get(target + "/x", timeout=5)
-    assert resp.text == "via-proxy" and _Proxy.seen[-1][1] == BASIC
+    resp = _get(target + "/x")
+    assert resp.text() == "via-proxy" and _Proxy.seen[-1][1] == BASIC
 
 
-def test_session_adapter_routes_with_the_credential_on_the_proxy_entry(monkeypatch):
-    """https goes through CONNECT: the credential rides on the proxy entry,
-    which proxylib's adapter sends to that proxy only (a session header would
-    reach the origin inside the tunnel instead)."""
-    pytest.importorskip("requests")
-    from syshttp.session import new_session
+def test_the_credential_is_not_a_header_of_the_client(target, proxy, monkeypatch):
+    from syshttp.client import HTTPClient
 
-    monkeypatch.setenv("SYSHTTP_PROXY", "http://proxy.example:3128")
+    monkeypatch.setenv("SYSHTTP_PROXY", "http://" + proxy)
     monkeypatch.setenv("SYSHTTP_PROXY_AUTH", BEARER)
-    session = new_session()
-    (entry,) = session.get_adapter("https://api.example.com/").route("https://api.example.com/")
-    assert entry.url == "http://proxy.example:3128" and entry.headers == {"Proxy-Authorization": BEARER}
-    assert "Proxy-Authorization" not in session.headers
+    _Proxy.expected = BEARER
+    with HTTPClient() as client:
+        client.request("GET", target + "/x", timeout=5)
+        assert "Proxy-Authorization" not in client.headers
+    assert [p for p, _ in _Proxy.seen] == [target + "/x"]
+    assert _Target.seen == [], "the origin was never asked"
 
 
-def test_session_honours_no_proxy(target, proxy, monkeypatch):
-    pytest.importorskip("requests")
-    from syshttp.session import new_session
-
+def test_the_client_honours_no_proxy(target, proxy, monkeypatch):
     monkeypatch.setenv("SYSHTTP_PROXY", "http://agent:s3cret@" + proxy)
     monkeypatch.setenv("NO_PROXY", "127.0.0.1")
-    resp = new_session(retries=0).get(target + "/x", timeout=5)
-    assert resp.text == "hello" and _Proxy.seen == []
+    resp = _get(target + "/x")
+    assert resp.text() == "hello" and _Proxy.seen == []
 
 
-def test_session_prefix_gateway(target, gateway, monkeypatch):
-    pytest.importorskip("requests")
-    from syshttp.session import new_session
+def test_the_client_goes_through_a_prefix_gateway(target, gateway, monkeypatch):
+    from syshttp.client import HTTPClient
 
     monkeypatch.setenv("SYSHTTP_PROXY", gateway)
     monkeypatch.setenv("SYSHTTP_PROXY_TYPE", "prefix:/fetch/")
     monkeypatch.setenv("SYSHTTP_PROXY_AUTH", BEARER)
-    session = new_session(retries=0)
-    assert not session.proxies, "a prefix gateway is the destination, not a proxy"
-    resp = session.get(target + "/x", timeout=5)
-    assert resp.text == "via-gateway"
-    assert _Gateway.seen[-1] == ("/fetch/" + target + "/x", BEARER)
-    assert resp.url == target + "/x", "the caller's URL, not the gateway's, is what the response reports"
-    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
-    assert session.get(target + "/x", timeout=5).text == "hello"
+    with HTTPClient() as client:
+        resp = client.request("GET", target + "/x", timeout=5)
+        assert resp.text() == "via-gateway"
+        assert _Gateway.seen[-1] == ("/fetch/" + target + "/x", BEARER)
+        assert resp.url == target + "/x", "the caller's URL, not the gateway's, is what the response reports"
+        monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+        assert client.request("GET", target + "/x", timeout=5).text() == "hello"
 
 
 # --------------------------------------------------------------------------
@@ -379,59 +373,37 @@ def test_proxy_user_replaces_the_credential(monkeypatch):
 # --------------------------------------------------------------------------
 
 
-def test_session_redirect_hop_stays_on_the_proxy_and_bypass_is_per_hop(target, proxy, monkeypatch):
-    pytest.importorskip("requests")
-    from syshttp.session import new_session
-
+def test_a_redirect_hop_stays_on_the_proxy_and_bypass_is_per_hop(target, proxy, monkeypatch):
     monkeypatch.setenv("SYSHTTP_PROXY", "http://" + proxy)
     monkeypatch.setenv("SYSHTTP_PROXY_AUTH", BASIC)
-    resp = new_session(retries=0).get(target + "/redirect", timeout=5)
-    assert resp.text == "via-proxy" and [p for p, _ in _Proxy.seen] == [target + "/redirect", target + "/final"]
+    resp = _get(target + "/redirect")
+    assert resp.text() == "via-proxy" and [p for p, _ in _Proxy.seen] == [target + "/redirect", target + "/final"]
     assert _Target.seen == []
-    # A bare session.send() and a redirect hop both go through the adapter.
-    session = new_session(retries=0)
-    prepared = session.prepare_request(__import__("requests").Request("GET", target + "/x"))
-    assert session.send(prepared, timeout=5).text == "via-proxy"
 
 
-def test_session_prefix_redirect_is_wrapped_again_and_the_caller_request_is_untouched(target, gateway, monkeypatch):
-    pytest.importorskip("requests")
-    import requests
-    from syshttp.session import new_session
-
+def test_a_prefix_redirect_is_wrapped_again_and_reports_the_target(target, gateway, monkeypatch):
     monkeypatch.setenv("SYSHTTP_PROXY", gateway)
     monkeypatch.setenv("SYSHTTP_PROXY_TYPE", "prefix:/fetch/")
     monkeypatch.setenv("SYSHTTP_PROXY_AUTH", BEARER)
-    session = new_session(retries=0)
-    prepared = session.prepare_request(requests.Request("GET", target + "/redirect"))
-    resp = session.send(prepared, timeout=5)
-    assert resp.text == "via-gateway" and resp.url == target + "/final"
+    resp = _get(target + "/redirect")
+    assert resp.text() == "via-gateway" and resp.url == target + "/final"
     assert [p for p, _ in _Gateway.seen] == ["/fetch/" + target + "/redirect", "/fetch/" + target + "/final"]
-    assert prepared.url == target + "/redirect" and "Proxy-Authorization" not in prepared.headers
 
 
-def test_session_global_proxy_vars_never_win_over_the_agent_proxy(target, proxy, monkeypatch):
-    """requests merges HTTP_PROXY from the environment over session.proxies;
-    the adapter passes the agent proxy explicitly so it cannot -- and the
-    credential is added for the agent proxy only."""
-    pytest.importorskip("requests")
-    from syshttp.session import new_session
-
+def test_global_proxy_vars_never_win_over_the_agent_proxy(target, proxy, monkeypatch):
+    """The agent proxy decides; the machine's variables are consulted only
+    when it is not set."""
     monkeypatch.setenv("SYSHTTP_PROXY", "http://" + proxy)
     monkeypatch.setenv("SYSHTTP_PROXY_AUTH", BASIC)
     monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")  # nothing listens there
     monkeypatch.setenv("http_proxy", "http://127.0.0.1:9")
-    resp = new_session(retries=0).get(target + "/x", timeout=5)
-    assert resp.text == "via-proxy"
+    assert _get(target + "/x").text() == "via-proxy"
 
 
-def test_session_caller_proxies_do_not_get_the_agent_credential(target, proxy, monkeypatch):
-    pytest.importorskip("requests")
-    from syshttp.session import new_session
-
+def test_a_proxymap_of_the_callers_gets_no_agent_credential(target, proxy, monkeypatch):
     monkeypatch.setenv("SYSHTTP_PROXY", "http://" + proxy)
     monkeypatch.setenv("SYSHTTP_PROXY_AUTH", BASIC)
-    resp = new_session(retries=0, proxies={"http": "http://" + proxy}).get(target + "/x", timeout=5)
-    assert resp.status_code == 407, "proxies= are requests' own: no credential of syshttp's is added"
-    resp = new_session(retries=0, proxies={"http": "http://agent:s3cret@" + proxy}).get(target + "/x", timeout=5)
-    assert resp.text == "via-proxy"
+    resp = _get(target + "/x", proxymap={"http": "http://" + proxy})
+    assert resp.status == 407, "a map of the caller's is its own: no credential of syshttp's is added"
+    resp = _get(target + "/x", proxymap={"http": "http://agent:s3cret@" + proxy})
+    assert resp.text() == "via-proxy"
