@@ -56,6 +56,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `jar.default_root()`: the per-user state directory used when
   `<PREFIX>_HOME` is unset.
 - `syshttp.__version__`.
+- Hosts that share cookies: `<PREFIX>_COOKIE_HOSTS` (hosts split by `,`,
+  groups by `;`) or `new_session(cookie_hosts=...)` declares names that reach
+  one service. In a group, a cookie a member sets for itself or another
+  member belongs to the first host, every member's requests carry the
+  group's cookies, and any member can delete them; a `Domain` outside the
+  group is still judged on the host that sent it. `cookies.host_aliases()`
+  builds the mapping, which `set_cookie_specs`, `merge_set_cookie_headers`
+  and `host_only_policy` take as `aliases=`.
+- The shipped header and the settings page list every variable syshttp
+  reads under its own name (the proxy family, `REQUEST_METHOD`, the CA bundle
+  variables, the state-directory variables, importpatch's and proxylib's).
 
 ### Changed
 
@@ -161,6 +172,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A by-host cookie file keeps a cookie its host set for a parent domain
+  (`Domain=example.com` from `www.example.com`); it was never saved.
 - The proxy credential reaches a proxy whose host is configured in upper
   case. requests lower-cases the proxy URL it hands to `proxy_headers`, so the
   credential used to be dropped and the proxy answered 407.

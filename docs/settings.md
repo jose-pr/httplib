@@ -16,10 +16,26 @@ import.
 | `<P>_PROXY_AUTH_HEADER` | the header `<P>_PROXY_AUTH` rides in | `Proxy-Authorization` |
 | `<P>_PROXY_TYPE` | `connect`, or `prefix[:/endpoint]` for a URL-prefix gateway | `connect` |
 | `<P>_HOME` | the directory of the cookie and token jars | the per-user state directory |
+| `<P>_COOKIE_HOSTS` | groups of hosts that share cookies: hosts split by `,`, groups by `;` | none |
 | `SYSHTTP_IMPORTPATCH` | client libraries patched as they are imported to use the system proxy and TLS: `1` for all, or `:`-separated names from `requests`, `urllib`, `httpx`, `aiohttp`, `pip`. Not `<P>_IMPORTPATCH`: under a prefix of a tool's own it is `<P>_SYSHTTP_IMPORTPATCH`, under the default or empty prefix `SYSHTTP_IMPORTPATCH` | none |
 | `<P>_HOOKS_<KEY>` | a URL hook's pattern; `_PY` and `_CURL` name its targets | none |
 | `<P>_HOOK_SKIP` | KEYs of hooks not to run | none |
 | `NO_PROXY` / `no_proxy` | hosts that never go through the proxy | none |
+
+### Read under their own names
+
+| Variable | Read by | For |
+| --- | --- | --- |
+| `http_proxy`, `https_proxy`, `ftp_proxy`, `ws_proxy`, `wss_proxy`, `all_proxy` (either case) | the proxy map (proxylib's `EnvProxyConfig`) | the machine's proxy, per scheme |
+| `REQUEST_METHOD` | the proxy map | set means CGI: an uppercase `HTTP_PROXY` is then a request header, ignored |
+| `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` | `new_session` (and requests) | a CA bundle named in the environment |
+| `LOCALAPPDATA` (Windows), `XDG_STATE_HOME` (Linux and other POSIX) | `jar.default_root` | the per-user state directory |
+| `IMPORTPATCH_DISABLE` | importpatch | `1` turns every import-time patch off |
+| `PROXYLIB_IMPORTPATCH`, `PROXYLIB_AUTOPROXY` | proxylib | proxylib's own patching, beside syshttp's |
+
+A `_CURL` hook's wrapper runs with `<P>_HOOK_URL`, `<P>_HOOK_KEY`,
+`<P>_HOOK_CURL` and `<P>_HOOK_SKIP` set (`hooks.wrapper_environment`); a curl
+front end reads them back.
 
 ## One prefix per tool
 
@@ -43,6 +59,22 @@ proxy.proxy_map(env=corp), proxy.proxy_map(env=lab)
 `NO_PROXY`, `HTTP_PROXY_AUTH`): no package setting and no hook. There is no
 default without a prefix, because CGI exports every request header as an
 `HTTP_*` variable, and a hook setting names code to import.
+
+## Hosts that share cookies
+
+A response may set or delete cookies only for its own host and that host's
+parent domains (RFC 6265). When two names reach one service, declare them a
+group:
+
+```sh
+SYSHTTP_COOKIE_HOSTS="app.example.com,app.example.net;localhost,127.0.0.1"
+```
+
+or `new_session(cookie_hosts=[["app.example.com", "app.example.net"]])`.
+In a group, a cookie a member sets for itself or for another member belongs
+to the first host, every member's requests carry the group's cookies, and
+any member can delete them. A `Domain` outside the group is still judged on
+the host that sent it.
 
 ## Prefix gateways
 

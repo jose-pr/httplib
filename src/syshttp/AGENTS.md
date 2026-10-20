@@ -154,7 +154,9 @@ def new_session(*, user_agent: str | None = None, proxies: dict | None = None,
                 cookies: bool | str | CookieJar = False, tokens: bool | str | TokenJar = False,
                 auth_provider: AuthProvider | None = None, env: HTTPEnv | None = None,
                 ssl_context: ssl.SSLContext | None = None,
-                proxy_ssl_context: ssl.SSLContext | None = None) -> requests.Session
+                proxy_ssl_context: ssl.SSLContext | None = None,
+                cookie_hosts: Iterable[Iterable[str]] | None = None) -> requests.Session
+COOKIE_HOSTS = "COOKIE_HOSTS"   # setting name, as `<P>_COOKIE_HOSTS`
 ```
 
 - One transport adapter, `ProxyAdapter` (a subclass of proxylib's
@@ -197,6 +199,24 @@ def new_session(*, user_agent: str | None = None, proxies: dict | None = None,
   `Bearer <token>`, or verbatim when it already names a scheme. An explicit
   `Authorization` header or `auth=` wins. A token containing a CR, LF or NUL
   raises `ValueError` naming the jar key, never the value.
+- `cookie_hosts`: groups of hosts the user declares to be one for cookies
+  (`cookies.host_aliases`); default `<P>_COOKIE_HOSTS`, read when the session
+  is built (groups split by `;`, hosts by `,`:
+  `app.example.com,app.example.net;wiki,wiki.corp.example`); `[]` for none.
+  A malformed variable raises `ConfigurationError` naming it; a malformed
+  argument `ValueError` (`TypeError` for a group given as one string).
+  Within a group:
+  - a host-only cookie a member sets, and one whose `Domain` names a member,
+    belongs to the group's first host (stored there, kept in its jar file);
+  - a request to any member carries what a request to any member would,
+    `Secure` and the path still applying per request;
+  - a member deletes such a cookie as the first host would;
+  - a `Domain` outside the group is judged on the host that sent it, so a
+    group never lets a host set a cookie for a domain that is not its own.
+  Without groups the RFC 6265 rule stands: no host sets or deletes another
+  host's cookie. Hosts are names or IP addresses, without a port; a host in
+  two groups raises. A by-host jar file of a member other than the first is
+  not read. Tokens stay per host.
 - `user_agent` replaces the session's `User-Agent` header.
 - A status in `status_forcelist` that outlasts `retries` is returned as the
   response (`raise_on_status=False`), as plain requests returns it; a
@@ -297,11 +317,13 @@ def load_netscape(path: Path) -> list[CookieSpec]
 def save_netscape(session_cookies: Iterable[CookieLike], path: Path) -> None
 def cookie_applies(cookie: CookieSpec, url: str, now: float | None = None) -> bool
 def set_cookie_specs(values: Iterable[str], default_domain: str, now: float | None = None, *,
-                     request_path: str = "/") -> list[tuple[CookieSpec, bool]]
+                     request_path: str = "/",
+                     aliases: Mapping[str, str] | None = None) -> list[tuple[CookieSpec, bool]]
 def domain_covers(domain: str, host: str) -> bool
 def apply_to_session(session, cookies: Iterable[CookieSpec]) -> None
-def merge_set_cookie_headers(session, response) -> None
-def host_only_policy() -> http.cookiejar.DefaultCookiePolicy
+def merge_set_cookie_headers(session, response, *, aliases: Mapping[str, str] | None = None) -> None
+def host_only_policy(aliases: Mapping[str, str] | None = None) -> http.cookiejar.DefaultCookiePolicy
+def host_aliases(groups: Iterable[Iterable[str]]) -> dict[str, str]
 HTTP_ONLY_PREFIX = "#HttpOnly_"
 MAX_COOKIE_AGE = 400 * 24 * 3600
 ```
@@ -343,7 +365,16 @@ MAX_COOKIE_AGE = 400 * 24 * 3600
   cookie was stored, an empty value), for the response and its redirect
   hops. It sets nothing: requests stores each cookie once, against the URL
   the caller asked for.
-- `FileCookieJar` keeps `HttpOnly` and the include-subdomains flag.
+- `FileCookieJar` keeps `HttpOnly` and the include-subdomains flag. A
+  by-host file holds every cookie that applies to its host, one a host set
+  for a parent domain (`Domain=example.com` from `www.example.com`) included.
+- `host_aliases(groups)` maps each host of each group (lower case, IPv6
+  brackets and a trailing dot removed) to the group's first host; a group of
+  one host is no alias. A host that is not a name or an IP address (a port,
+  a path, a blank) or that is in two groups raises `ValueError`; a group
+  given as one string, `TypeError`. `set_cookie_specs`,
+  `merge_set_cookie_headers` and `host_only_policy` take the mapping as
+  `aliases` and apply `new_session`'s `cookie_hosts` rules.
 
 ## URL hooks (`syshttp.hooks`)
 
@@ -500,10 +531,26 @@ def patched() -> tuple[str, ...]
 | `<P>_PROXY_AUTH_HEADER` | the header name `<P>_PROXY_AUTH` rides in | `Proxy-Authorization` |
 | `<P>_PROXY_TYPE` | `connect` or `prefix[:/endpoint]` | `connect` |
 | `<P>_HOME` | the jar root | the per-user state directory |
+| `<P>_COOKIE_HOSTS` | groups of hosts that share cookies: hosts split by `,`, groups by `;` (`new_session`) | none |
 | `SYSHTTP_IMPORTPATCH` (`<PREFIX>_SYSHTTP_IMPORTPATCH` under a prefix of its own) | which client libraries are patched on import (`1` for all, or `:`-separated names: `requests`, `urllib`, `httpx`, `aiohttp`, `pip`) | none |
 | `<P>_HOOKS_<KEY>` (+ `_PY`, `_CURL`) | a URL hook | none |
 | `<P>_HOOK_SKIP` | KEYs of hooks not to run, comma list | none |
 | `NO_PROXY` / `no_proxy` | hosts that go direct | none |
+
+Read too, under their own names:
+
+| Variable | Read by | For |
+| --- | --- | --- |
+| `http_proxy`, `https_proxy`, `ftp_proxy`, `ws_proxy`, `wss_proxy`, `all_proxy` (either case) | the proxy map (proxylib's `EnvProxyConfig`) | the machine's proxy, per scheme |
+| `REQUEST_METHOD` | the proxy map | set means CGI: an uppercase `HTTP_PROXY` is then a request header, ignored |
+| `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` | `new_session` (and requests) | a CA bundle named in the environment |
+| `LOCALAPPDATA` (Windows), `XDG_STATE_HOME` (Linux and other POSIX) | `jar.default_root` | the per-user state directory |
+| `IMPORTPATCH_DISABLE` | importpatch | `1` turns every import-time patch off |
+| `PROXYLIB_IMPORTPATCH`, `PROXYLIB_AUTOPROXY` | proxylib | proxylib's own patching, beside syshttp's |
+
+A `_CURL` hook's wrapper runs with `<P>_HOOK_URL`, `<P>_HOOK_KEY`,
+`<P>_HOOK_CURL` and `<P>_HOOK_SKIP` set (`hooks.wrapper_environment`); a curl
+front end reads them back.
 
 ## Gotchas
 
