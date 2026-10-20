@@ -70,6 +70,17 @@ def peer_text(text: object, limit: int = 120) -> str:
     return shown + "..." if cut else shown
 
 
+def shown(url: str) -> str:
+    """`url` as an error message may print it: scheme, host, port and path; no
+    userinfo, query or fragment, which can carry a credential."""
+    try:
+        split = _urlparse.urlsplit(url)
+        netloc = split.netloc.rpartition("@")[2]
+        return _urlparse.urlunsplit((split.scheme, netloc, split.path, "", ""))
+    except ValueError:
+        return "(unreadable URL)"
+
+
 def has_header(headers: "_abc.Mapping[str, str]", name: str) -> bool:
     key = name.lower()
     return any(field.lower() == key for field in headers)

@@ -8,7 +8,7 @@ import errno as _errno
 import re as _re
 import urllib.parse as _urlparse
 
-from ._headers import check_url, drop_header, peer_text
+from ._headers import check_url, drop_header, peer_text, shown
 from ._response import HTTPResponse
 
 MAX_REDIRECTS = 30
@@ -77,17 +77,6 @@ def origin(url: str) -> "tuple[str, str, int | None]":
         port = -1
     # `hostname` is lower case already; a host name is case-insensitive.
     return scheme, (split.hostname or "").lower(), port or _DEFAULT_PORTS.get(scheme)
-
-
-def shown(url: str) -> str:
-    """`url` as an error message may print it: no userinfo, query or fragment,
-    which can carry a credential."""
-    try:
-        split = _urlparse.urlsplit(url)
-        netloc = split.netloc.rpartition("@")[2]
-        return _urlparse.urlunsplit((split.scheme, netloc, split.path, "", ""))
-    except ValueError:
-        return "(unreadable URL)"
 
 
 def is_redirect(resp: HTTPResponse) -> bool:

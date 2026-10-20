@@ -11,7 +11,7 @@ import zlib as _zlib
 
 from ..exceptions import ResponseError
 from . import _settings
-from ._headers import Headers, peer_text
+from ._headers import Headers, peer_text, shown
 
 CHUNK = 64 * 1024
 """Most bytes read from a transport's body in one call."""
@@ -238,7 +238,7 @@ class HTTPResponse:
         taken with `read()` or `iter_bytes()` are not in it."""
         if self._content is None:
             limit = _settings.MAX_REPLY_BYTES
-            self._buffered(limit, too_large(self.url, limit))
+            self._buffered(limit, too_large(shown(self.url), limit))
             self._content = self.read()
         return self._content
 
@@ -276,12 +276,14 @@ class HTTPResponse:
             self._closed = True
             self._source.close()
 
-    def buffered(self) -> "HTTPResponse":
+    def buffered(self, limit: "int | None" = None) -> "HTTPResponse":
         """Reads the rest of the body into memory, closes the connection and
         returns this response, which can then be read after it is closed. A
         transport returns its response this way when `send()` is called with
-        `stream=False`."""
-        return self._buffered()
+        `stream=False`. A body that decodes to more than `limit` bytes (default
+        `MAX_REPLY_BYTES`) is `OSError(EFBIG)`, and its connection is closed."""
+        limit = _settings.MAX_REPLY_BYTES if limit is None else limit
+        return self._buffered(limit, too_large(shown(self.url), limit))
 
     def _buffered(self, limit: "int | None" = None, message: str = "") -> "HTTPResponse":
         """Reads the rest of the body into memory and closes the source, so the

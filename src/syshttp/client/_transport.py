@@ -349,7 +349,8 @@ class HTTPTransport:
         `Content-Length`, any other chunked; a `Content-Length` in `headers`
         is used as it is. `timeout` is seconds for the connection and for each wait on the
         server: a number, a `(connect, read)` pair, or `None` to wait for ever.
-        With `stream=False` the body has been read when this returns; with
+        With `stream=False` the body has been read when this returns (a body
+        that decodes to more than `MAX_REPLY_BYTES` is `OSError(EFBIG)`); with
         `stream=True` it is read from the response, which must be closed.
 
         Raises `ValueError` before anything is sent for a header or URL with
@@ -373,7 +374,7 @@ class HTTPTransport:
         response = self._attempt(
             route, method, pairs, names, payload, connect_timeout, read_timeout, plain_url, decode, scope
         )
-        return response if stream else response._buffered()
+        return response if stream else response.buffered()
 
     def _plan(self, entry: "proxylib.Proxy | None", target: Target, plain_url: str) -> _Route:
         if entry is None:
