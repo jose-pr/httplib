@@ -65,14 +65,29 @@ class CookieSpec:
 
 HTTP_ONLY_PREFIX = "#HttpOnly_"
 
+#: What no cookie name or value may hold (RFC 6265bis 5.6): the controls but
+#: the tab. A header that holds one is ignored, and a row that holds one is
+#: neither read nor written, so a value cannot end a line of a jar file.
+_CONTROL = re.compile(r"[\x00-\x08\x0a-\x1f\x7f]")
+#: What a jar file's row cannot carry in a field: every control, the tab (the
+#: separator) included.
+_UNSAFE_FIELD = re.compile(r"[\x00-\x1f\x7f]")
+
 
 def load_netscape(path: Path) -> List[CookieSpec]:
+    """The rows of the Netscape cookie file ``path`` (``[]`` when it is
+    missing). Lines end at ``\\n`` only, one trailing ``\\r`` taken off, and a
+    row whose name or value holds a control character is skipped: other
+    characters ``str.splitlines`` honours (``\\x0b``, ``\\x0c``, ``\\x85``) are
+    part of a value, not the end of a row."""
     try:
         text = read_text(path)
     except FileNotFoundError:
         return []
     cookies: List[CookieSpec] = []
-    for line in text.splitlines():
+    for line in text.split("\n"):
+        if line.endswith("\r"):
+            line = line[:-1]
         # Only the leading blanks go: a trailing tab separates an empty value.
         line = line.lstrip(" ")
         # curl writes an HttpOnly cookie's domain as `#HttpOnly_<domain>`; any
@@ -85,6 +100,8 @@ def load_netscape(path: Path) -> List[CookieSpec]:
         if len(parts) < 7:
             continue
         domain, flag, cpath, secure, expires, name, value = parts[:7]
+        if _CONTROL.search(name) or _CONTROL.search(value):
+            continue
         http_only = domain.startswith(HTTP_ONLY_PREFIX)
         if http_only:
             domain = domain[len(HTTP_ONLY_PREFIX) :]
@@ -256,7 +273,11 @@ def _default_path(request_path: str) -> str:
 def _parse_set_cookie(header: str, now: float) -> "Optional[Tuple[str, str, Dict[str, str]]]":
     """RFC 6265 section 5.2: ``(name, value, attributes)`` of one header, the
     attribute names lower-case; an expiry is resolved into ``expires`` (a unix
-    time as text). ``None`` when the header holds no cookie."""
+    time as text). ``None`` when the header holds no cookie, or holds a
+    control character (the tab apart), which RFC 6265bis 5.6 and curl ignore
+    the whole cookie for."""
+    if _CONTROL.search(header):
+        return None
     pair, _, rest = header.partition(";")
     name, eq, value = pair.partition("=")
     name, value = name.strip(), value.strip()
@@ -349,6 +370,9 @@ def domain_covers(domain: str, host: str) -> bool:
 
 
 def save_netscape(session_cookies: "Iterable[CookieLike]", path: Path) -> None:
+    """Writes ``session_cookies`` to ``path`` as a Netscape cookie file, owner
+    only and replaced whole. A cookie with no name, or with a control character
+    or a tab in a field, is not written: it would split its row."""
     lines = ["# Netscape HTTP Cookie File\n"]
     for cookie in session_cookies:
         domain = getattr(cookie, "domain", "") or ""
@@ -361,7 +385,7 @@ def save_netscape(session_cookies: "Iterable[CookieLike]", path: Path) -> None:
         expires = str(int(expires_val)) if expires_val else "0"
         name = getattr(cookie, "name", "")
         value = getattr(cookie, "value", "")
-        if not name:
+        if not name or any(_UNSAFE_FIELD.search(str(field)) for field in (domain, cpath, name, value)):
             continue
         lines.append("%s\t%s\t%s\t%s\t%s\t%s\t%s\n" % (domain, flag, cpath, secure, expires, name, value))
     write_private(path, "".join(lines).encode("utf-8"))

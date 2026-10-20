@@ -111,7 +111,10 @@ class Cookies:
 
     # -- the rows
 
-    def _load(self, rows: "_ty.Iterable[CookieSpec]") -> None:
+    def _load(self, rows: "_ty.Iterable[CookieSpec]", hosts: "_ty.Sequence[str] | None" = None) -> None:
+        """Keeps `rows`; with `hosts`, only the ones whose domain covers one of
+        them, so a file that holds a row for another domain (planted, or
+        copied) never sends it from this host."""
         for row in rows:
             bare = row.domain.lstrip(".").lower()
             if not bare:
@@ -121,6 +124,8 @@ class Cookies:
             spec = _dataclasses.replace(
                 row, domain=bare, subdomains=subdomains, path=row.path or "/", expires=row.expires or None
             )
+            if hosts is not None and not any(self._covers(spec, host) for host in hosts):
+                continue
             self._rows[(bare, spec.path, spec.name)] = spec
 
     @staticmethod
@@ -149,11 +154,14 @@ class Cookies:
             for key in self._keys(url):
                 if key in self._loaded:
                     continue
+                host = self._host(url)
                 try:
-                    self._load(self._jar.get(key, []))
+                    # A by-host file holds its host's (or group's) cookies only.
+                    covered = self._group_of.get(key, [key]) if self._key == BY_HOST else None
+                    self._load(self._jar.get(key, []), covered)
                 except Exception:
                     pass  # an unreadable jar is an empty one
-                self._synced[key] = frozenset(self._rows_for(key, self._host(url)))
+                self._synced[key] = frozenset(self._rows_for(key, host))
                 self._loaded.add(key)
 
     def header(self, url: str, now: "float | None" = None) -> "str | None":

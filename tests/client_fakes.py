@@ -110,3 +110,20 @@ class RecordingTransport:
 
     def clear(self):
         self.sent.clear()
+
+
+class Script:
+    """A transport answering from a table of URL -> (status, header pairs),
+    with an empty body, and recording `(method, url, headers)` of every send."""
+
+    def __init__(self, answers=None):
+        self.answers = answers or {}
+        self.sent = []
+
+    def send(self, method, url, *, headers, body=None, timeout, stream=False):
+        self.sent.append((method, url, dict(headers)))
+        status, pairs = self.answers.get(url, (200, []))
+        return HTTPResponse(status, "", pairs, url, b"")
+
+    def close(self):
+        pass
