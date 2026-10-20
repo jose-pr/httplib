@@ -14,6 +14,11 @@ from ._response import HTTPResponse
 MAX_REDIRECTS = 30
 """Most redirects a `GET`, `HEAD` or `OPTIONS` follows."""
 
+CREDENTIAL_HEADERS = ("Authorization", "Cookie", "Proxy-Authorization")
+"""The headers a caller keeps a secret in, which a redirect to another scheme,
+host or port leaves off, for that hop and every later one. The cookies of the
+client's jar are chosen again for each hop."""
+
 FOLLOWED_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 """Methods whose redirects are followed. Every other method goes through
 `send_once()`: following would turn a state-changing one into a different
@@ -146,16 +151,18 @@ def send_following(
     deadline=None,
 ) -> HTTPResponse:
     """Send a request that carries no body and follow its redirects, up to
-    `MAX_REDIRECTS`. `Authorization` goes to the origin of `first` (the URL
-    the caller asked for; `url` when it is not given) and nowhere else: a
-    request to another scheme, host or port drops it, and for every later
-    hop. A `303` becomes a `GET` (unless the request was a `HEAD`)."""
+    `MAX_REDIRECTS`. `Authorization`, `Cookie` and `Proxy-Authorization` go
+    to the origin of `first` (the URL the caller asked for; `url` when it is
+    not given) and nowhere else: a request to another scheme, host or port
+    drops them, and for every later hop. A `303` becomes a `GET` (unless the
+    request was a `HEAD`)."""
     home = origin(first or url)
     current = url
     hops = 0
     while True:
         if origin(current) != home:
-            headers = drop_header(headers, "Authorization")
+            for name in CREDENTIAL_HEADERS:
+                headers = drop_header(headers, name)
         resp = transport.send(
             method,
             current,

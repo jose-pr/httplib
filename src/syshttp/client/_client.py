@@ -79,7 +79,8 @@ class HTTPClient:
 
     The client, not the transport, follows redirects. `GET`, `HEAD` and
     `OPTIONS` follow up to 30; a redirect that changes the scheme, host or
-    port drops `Authorization` (and nothing else). Any other method is sent
+    port drops `Authorization`, `Cookie` and `Proxy-Authorization` (and nothing
+    else; the jar's cookies are chosen again for each hop). Any other method is sent
     without following: a 307 or 308 (for `PROPFIND` also a 301, 302 or 303) to
     the same scheme, host and port is sent once more with the same method and
     body, and any other 3xx, a redirect to another origin or a second redirect
@@ -399,8 +400,9 @@ class HTTPClient:
     ) -> HTTPResponse:
         """Send `method` to where `resp`, the answer to a request for `url`,
         redirects to, and follow what it redirects to in turn. The request
-        carries what `url` is sent with, except that `Authorization` is left
-        off whenever it goes to another scheme, host or port than `url`'s. A
+        carries what `url` is sent with, except that `Authorization`, `Cookie`
+        and `Proxy-Authorization` are left off whenever it goes to another
+        scheme, host or port than `url`'s. A
         redirect with no usable `Location` is `OSError(EIO)`. Cookies apply to
         every hop; the token, hooks and retries belong to `request()`."""
         sent = self._sent_headers(headers, auth)

@@ -3,8 +3,9 @@
 `HTTPClient` sends a request through a transport (an object with `send()` and
 `close()`: the default `HTTPTransport` on `http.client`, or one written
 against the `Transport` protocol) and follows redirects under one rule for
-credentials: `Authorization` goes to the origin it was given for and to no
-other scheme, host or port. A reply comes back as an `HTTPResponse`.
+credentials: `Authorization`, `Cookie` and `Proxy-Authorization` go to the
+origin they were given for and to no other scheme, host or port. A reply comes
+back as an `HTTPResponse`.
 
 Importing this package loads `http.client` and `ssl`. Nothing here needs a
 third-party library; `requests` in particular is not used.
