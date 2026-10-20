@@ -1,3 +1,0 @@
-# `syshttp.fetch`
-
-::: syshttp.fetch

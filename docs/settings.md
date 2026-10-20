@@ -25,7 +25,8 @@ read when they are needed, never at import.
 | `HTTP_PROXY`, `HTTPS_PROXY`, `FTP_PROXY`, `WS_PROXY`, `WSS_PROXY`, `ALL_PROXY` | the machine's proxy, per scheme (either case, lowercase first) | none |
 | `HTTP_PROXY_AUTH` | the machine's proxy's credential (a `*_PROXY` variable's or the system's), sent as `Proxy-Authorization` (a secret) | the URL's userinfo as Basic |
 | `NO_PROXY` / `no_proxy` | hosts that never go through the proxy | none |
-| `CA_BUNDLE` | the CA bundle a session's `verify=True` uses; requests' `REQUESTS_CA_BUNDLE` / `CURL_CA_BUNDLE` are not read | the OS verifier |
+| `SYSHTTP_DEFAULT_TRANSPORT` | the transport of an `HTTPClient` (and `fetch()`) given none: `module:attr` or `<file>.py:attr`; names code to import | syshttp's own |
+| `CA_BUNDLE` | the CA bundle a client's `verify=True` uses; requests' `REQUESTS_CA_BUNDLE` / `CURL_CA_BUNDLE` are not read | the OS verifier |
 
 A `_CURL` hook's wrapper runs with `SYSHTTP_HOOK_URL`, `SYSHTTP_HOOK_KEY`,
 `SYSHTTP_HOOK_CURL` and `SYSHTTP_HOOK_SKIP` set under the first prefix; a
@@ -74,7 +75,7 @@ group:
 SYSHTTP_COOKIE_HOSTS="app.example.com,app.example.net;localhost,127.0.0.1"
 ```
 
-or `new_session(cookie_hosts=[["app.example.com", "app.example.net"]])`.
+or `HTTPClient(cookie_hosts=[["app.example.com", "app.example.net"]])`.
 In a group, a cookie a member sets for itself or for another member belongs
 to the first host, every member's requests carry the group's cookies, and
 any member can delete them. A `Domain` outside the group is still judged on
@@ -89,5 +90,27 @@ SYSHTTP_PROXY=https://gw.example SYSHTTP_PROXY_TYPE=prefix:/fetch/
 With these set, `GET https://api.example.com/x` is sent to
 `https://gw.example/fetch/https://api.example.com/x`, with the credential as a
 header of that request. Redirects, cookies and `response.url` still use the
-caller's URL. requests, httpx and urllib follow a gateway; aiohttp is not
-offered one (proxylib's `UnsupportedProxyError`).
+caller's URL. `syshttp.client`, requests, httpx and urllib follow a gateway;
+aiohttp is not offered one (proxylib's `UnsupportedProxyError`).
+
+## The default transport
+
+An `HTTPClient` (and so `fetch()`) built without a `transport=` sends through
+syshttp's own, on `http.client`. `SYSHTTP_DEFAULT_TRANSPORT` names another:
+
+```sh
+SYSHTTP_DEFAULT_TRANSPORT=mypackage.transport:HttpxTransport
+SYSHTTP_DEFAULT_TRANSPORT=/opt/tools/transport.py:make_transport
+```
+
+The value is an object reference, `module:attr` or `<file>.py:attr` (a dotted
+`attr` is allowed), resolved as a `_PY` hook is. The object is the transport
+when it has `send()`; a class or a factory is called with no arguments to make
+one, which the client then closes. A value that cannot be imported, called or
+used raises `ConfigurationError` naming the variable; nothing falls back
+silently. An explicit `transport=` beats the setting, and the setting beats
+syshttp's own. It is read when the client is made, under the prefixes like every
+setting. The transport protocol is in the [client reference](api/client.md).
+
+It names code to import: never let an untrusted party set the environment of a
+process using syshttp.

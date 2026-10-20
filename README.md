@@ -11,9 +11,9 @@ which proxy to use, with which credential, for which hosts; how a prefix
 gateway is spoken to; which cookies and tokens go with which origin; and TLS
 through the operating system's own certificate verifier. By default it
 routes the way the system does: the system's proxy configuration, PAC scripts
-and WPAD included, unless a proxy variable says otherwise. An optional
-`requests` session puts all of them
-together. Documentation: <https://jose-pr.github.io/syshttp/>.
+and WPAD included, unless a proxy variable says otherwise. An HTTP client on the
+standard library puts all of them together; `requests` is needed by none of
+it. Documentation: <https://jose-pr.github.io/syshttp/>.
 
 ## Features
 
@@ -33,7 +33,7 @@ together. Documentation: <https://jose-pr.github.io/syshttp/>.
   (CIDR included), and every redirect hop is decided again.
 - **Prefix gateways** — `SYSHTTP_PROXY_TYPE=prefix:/fetch/` sends
   `GET https://api.example.com/x` to `<proxy>/fetch/https://api.example.com/x`
-  (requests, httpx and urllib). Responses, redirects and cookies still use
+  (the client, requests, httpx and urllib). Responses, redirects and cookies still use
   the caller's URL.
 - **Prefixes of a tool's own** — `SYSHTTP_PREFIX=MYTOOL_` makes the package
   read `MYTOOL_HTTPS_PROXY`, `MYTOOL_SYSHTTP_HOME` and so on instead of the
@@ -51,10 +51,13 @@ together. Documentation: <https://jose-pr.github.io/syshttp/>.
   operating system verifies certificates (CryptoAPI, the Security framework),
   with no `certifi` bundle involved, and a server that asks for a client
   certificate gets one from the OS store (smart cards included), chosen as a
-  browser chooses. Or `new_session(ssl_context=...)` for a given identity, a
+  browser chooses. Or `HTTPClient(ssl_context=...)` for a given identity, a
   cipher list or a pinned protocol version.
-- **A configured `requests.Session`** — retry with backoff, all of the above
-  applied in one transport adapter.
+- **An HTTP client on the standard library** — `HTTPClient` and `fetch()`:
+  retry with backoff, redirects that keep a credential with its origin, and
+  all of the above, on `http.client` and `ssl` alone. Its transport is
+  replaceable: any object with `send()` (a `requests` or `httpx` one, a fake
+  in a test), chosen per client or by `SYSHTTP_DEFAULT_TRANSPORT`.
 - **Other programs' clients, patched on import** — `SYSHTTP_IMPORTPATCH=1`
   (or `requests:urllib:httpx:aiohttp:pip`) makes those libraries route and
   verify the same way in any program of the environment, through
@@ -69,7 +72,6 @@ pip install syshttp
 
 | Extra | Adds | Needed for |
 | --- | --- | --- |
-| `session` | `requests` (with `urllib3`) | `syshttp.session` and `syshttp.fetch` |
 | `pac` | a JavaScript engine for proxylib | PAC scripts proxylib evaluates itself (Linux without libproxy) |
 
 syshttp depends on proxylib (the system proxy), sslcontext (the system's
@@ -89,24 +91,31 @@ for entry in proxylib.lookup(proxy.proxy_map(), "https://api.example.com/"):
     print("DIRECT" if entry is None else entry.url)   # tried in this order
 ```
 
-A session with file-backed cookies and tokens (`pip install 'syshttp[session]'`):
+One request, routed and verified the way the system does (no extra to install):
 
 ```python
-from syshttp.session import new_session
-from syshttp.fetch import request_json
+from syshttp import fetch
 
-s = new_session(cookies=True, tokens=True)
-status, body = request_json(s, "GET", "https://api.example.com/thing")
+response = fetch("https://api.example.com/thing")
+print(response.status, response.json())
+```
+
+A client with file-backed cookies and tokens, kept across requests:
+
+```python
+from syshttp.client import HTTPClient
+
+with HTTPClient(cookies=True, tokens=True) as client:
+    response = client.request("GET", "https://api.example.com/thing")
 ```
 
 A separate configuration, isolated from the process environment:
 
 ```python
-from syshttp import HTTPEnv
-from syshttp.session import new_session
+from syshttp import HTTPEnv, fetch
 
 env = HTTPEnv("MYTOOL_", environ={"MYTOOL_SYSHTTP_PROXY": "http://proxy.internal:3128"})
-s = new_session(env=env)
+response = fetch("https://api.example.com/thing", env=env)
 ```
 
 ## API overview
@@ -115,8 +124,7 @@ s = new_session(env=env)
 | --- | --- |
 | `syshttp.env` | `HTTPEnv`: the prefixes and mapping every setting is read from |
 | `syshttp.proxy` | `proxy_map()`: the settings as one proxylib proxy map |
-| `syshttp.session` | `new_session()`: a configured `requests.Session` |
-| `syshttp.fetch` | text and JSON request helpers, retry once after a 401/403 |
+| `syshttp.client` | `HTTPClient` and `fetch()`: the HTTP client, its transport protocol and response |
 | `syshttp.jar` | file and memory cookie/token jars |
 | `syshttp.cookies` | Netscape cookie files and curl's cookie rules |
 | `syshttp.hooks` | URL hooks declared in the environment |
@@ -142,7 +150,8 @@ full list is on the docs site:
 | `SYSHTTP_HOME` | the jar directory (default: the per-user state directory) |
 | `SYSHTTP_IMPORTPATCH` | `1`, or `:`-separated names: the client libraries patched on import |
 | `SYSHTTP_HOOKS_<KEY>` | a URL hook's pattern, with `_PY` / `_CURL` targets |
-| `CA_BUNDLE` | the CA bundle a session verifies with (default: the OS verifier) |
+| `SYSHTTP_DEFAULT_TRANSPORT` | `module:attr` or `<file>.py:attr`: the transport of a client given none (it names code to import) |
+| `CA_BUNDLE` | the CA bundle a client verifies with (default: the OS verifier) |
 
 ## Development
 

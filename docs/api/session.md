@@ -1,3 +1,0 @@
-# `syshttp.session`
-
-::: syshttp.session

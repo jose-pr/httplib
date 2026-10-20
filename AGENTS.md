@@ -8,7 +8,16 @@
 
 - `src/syshttp/` — the package. `env.py` is the only module that knows how a
   setting's name is built; every other module asks an `HTTPEnv`.
+- `src/syshttp/client/` — the HTTP client on the standard library: `_client`
+  (`HTTPClient`), `_transport` (the default transport and the `Transport`
+  protocol), `_route` / `_context` / `_tlstunnel` (proxy map, TLS choice, TLS
+  inside an https proxy), `_state` (cookies, tokens), `_default` (the
+  `SYSHTTP_DEFAULT_TRANSPORT` setting), `_fetch`; the rest (`_follow`, `_pool`,
+  `_headers`, `_body`, `_response`, `_status`, `_deadline`, `_prepare`) follows
+  the design of `pathapi.http`.
 - `tests/` — pytest. `conftest.py` clears every `SYSHTTP_*` variable per test.
+  `client_wire.py` (byte-level loopback servers, a proxy) and
+  `client_fakes.py` (a fake transport) serve the client and transport tests;
   `test_proxy_auth.py` and `test_jars_proxy.py` hold fake proxies, gateways
   and origins on 127.0.0.1 that other test modules import.
 - `docs/` + `mkdocs.yml` — the docs site (MkDocs Material, mkdocstrings).
@@ -38,9 +47,9 @@ The 3.9 venv needs `pip install --upgrade pip` before an editable install
 
 - A setting is read through `HTTPEnv` at call time, never at import.
   Messages name the variable found (`env.find(...)`), else `env.name(...)`.
-- `requests` is imported inside functions only, and under `TYPE_CHECKING` for
-  annotations. `test_syshttp_typing_never_imports_requests_at_runtime`
-  enforces this.
+- Only `autopatch` names `requests` or `urllib3`; the client, hooks and jars
+  never import them (`test_switches.py` enforces it, and runs `fetch()` with
+  both blocked from import).
 - Black, line length 120, target py39.
 
 ## Releasing

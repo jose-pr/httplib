@@ -5,15 +5,14 @@
 hosts. It speaks to URL-prefix gateways, files cookies and tokens under the
 origin's host, and has the operating system verify certificates. With no
 proxy variable set it routes the way the system does (its proxy settings, PAC,
-WPAD). An optional `requests` session
-(`pip install 'syshttp[session]'`) applies all of them in one transport
-adapter.
+WPAD). Its own HTTP client, on the standard library alone, applies all of them;
+`requests` is needed by no feature, and only `syshttp.autopatch` patches it.
 
 ```python
-from syshttp.session import new_session
+from syshttp import fetch
 
-s = new_session(cookies=True, tokens=True)
-print(s.get("https://example.com/").status_code)
+response = fetch("https://example.com/", cookies=True, tokens=True)
+print(response.status, response.headers["Content-Type"])
 ```
 
 - [Settings](settings.md): the variables, their prefix, and `HTTPEnv`.

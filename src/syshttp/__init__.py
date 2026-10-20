@@ -1,5 +1,5 @@
-"""syshttp -- HTTP plumbing that follows the system, with an optional
-``requests`` session on top.
+"""syshttp -- HTTP plumbing that follows the system, and an HTTP client on the
+standard library that uses it.
 
 Public surface (the package's AGENTS.md documents each name):
   env.HTTPEnv                          — where settings come from: <PREFIX><NAME> for each
@@ -10,22 +10,22 @@ Public surface (the package's AGENTS.md documents each name):
                                          --noproxy overrides included)
   proxy.configured_proxy / proxy_type  — SYSHTTP_PROXY as a proxylib Proxy; SYSHTTP_PROXY_TYPE
                                          (connect | prefix[:/endpoint])
+  client.HTTPClient / fetch            — the client: proxy map, system TLS, cookies, tokens,
+                                         hooks, retries; replaceable transport. ``fetch`` is
+                                         also ``syshttp.fetch``
   cookies.load_netscape / save_netscape / cookie_applies / set_cookie_specs
                                        — Netscape jars and curl's cookie rules
   tls.os_ssl_context / new_os_context  — the system's TLS client (sslcontext) as an SSLContext
   retry.TRANSIENT_STATUSES / retry_after — what counts as transient, Retry-After
   jar.FileCookieJar / FileTokenJar     — file-backed jars under SYSHTTP_HOME
   hooks                                — SYSHTTP_HOOKS_<KEY> URL hooks (a curl wrapper,
-                                         an syshttp callable) matched on the caller's URL
-  session.new_session                  — configured requests.Session
-  fetch.request_text / request_json / request_with_reauth / *_auto helpers
+                                         a syshttp callable) matched on the caller's URL
   autopatch                            — SYSHTTP_IMPORTPATCH: requests, urllib, httpx, aiohttp,
                                          pip patched on import to route and verify the same way
 
-``env``, ``proxy``, ``jar``, ``cookies``, ``tls``, ``retry`` and ``hooks``
-need only syshttp's dependencies (proxylib, sslcontext);
-``session``/``fetch`` import ``requests`` lazily (the
-``session`` extra).
+Nothing here imports ``requests``: only ``autopatch`` patches it, in a program
+that imports it. Importing ``syshttp`` itself loads neither proxylib nor the
+client.
 """
 
 from importlib.metadata import PackageNotFoundError, version

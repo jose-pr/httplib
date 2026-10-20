@@ -43,7 +43,12 @@ class Transport(_ty.Protocol):
 
     `send()` takes the arguments `prepare_request()` checks and returns an
     `HTTPResponse` (`stream=False`: its body already read; `stream=True`: the
-    caller closes it); `close()` releases whatever the transport holds."""
+    caller closes it); `close()` releases whatever the transport holds. The
+    client does the redirects, cookies, tokens, hooks, retries and deadline
+    above it. Routing (the proxy map, `CONNECT`, gateways), TLS verification,
+    connection reuse and decoding a `gzip` or `deflate` body are the
+    transport's: `HTTPTransport` does them with syshttp's proxy map and the
+    system's TLS, and a transport on another library brings that library's."""
 
     def send(
         self,

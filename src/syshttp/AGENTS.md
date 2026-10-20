@@ -7,24 +7,23 @@ self-contained. Development documentation lives with the source at
 <https://github.com/jose-pr/syshttp>.
 
 Import names from their modules: `syshttp.env`, `syshttp.proxy`,
-`syshttp.session`, `syshttp.fetch`, `syshttp.jar`, `syshttp.cookies`,
-`syshttp.hooks`, `syshttp.tls`, `syshttp.retry`, `syshttp.auth`,
-`syshttp.exceptions`, `syshttp.autopatch`. Each declares `__all__`: a name
-outside it is not API, and a module whose name starts with `_` is private.
-The root re-exports `HTTPEnv`, the exceptions, `NoReachableProxyError`,
-`proxy_map`, `configured_proxy` and `proxy_type`.
+`syshttp.client`, `syshttp.jar`, `syshttp.cookies`, `syshttp.hooks`,
+`syshttp.tls`, `syshttp.retry`, `syshttp.auth`, `syshttp.exceptions`,
+`syshttp.autopatch`. Each declares `__all__`: a name outside it is not API,
+and a module whose name starts with `_` is private. The root re-exports
+`HTTPEnv`, the exceptions, `NoReachableProxyError`, `proxy_map`,
+`configured_proxy`, `proxy_type` and `fetch` (the function of
+`syshttp.client`, imported when it is asked for); there is no `syshttp.fetch`
+module.
 
 `pip install syshttp` brings proxylib 2.0.2+ (proxy routing and the system's proxy configuration),
 sslcontext (the system's TLS client; truststore on Python 3.10+) and
 importpatch (import-time patching of other HTTP clients, off unless
 `SYSHTTP_IMPORTPATCH` asks for it). The extra `pac`
 adds a JavaScript engine for PAC scripts proxylib evaluates itself (Linux
-without libproxy). The extra `session` adds `requests` 2.32.5+ and `urllib3` 2.6.3+ (each
-floor is the newest release that supports Python 3.9), which
-`syshttp.session` and
-`syshttp.fetch` import when a session is built. Without it, `new_session()`
-raises `ImportError` saying `pip install 'syshttp[session]'`. Every other
-module works without it.
+without libproxy). The client needs nothing else: `requests` is no dependency
+of any feature; only `syshttp.autopatch` touches it, in a program that imports
+it, when `SYSHTTP_IMPORTPATCH` asks for it.
 
 `syshttp.__version__` is the installed distribution's version.
 
@@ -150,72 +149,137 @@ DEFAULT_AUTH_HEADER = "Proxy-Authorization"; MACHINE_AUTH_VAR = "HTTP_PROXY_AUTH
 - How an answer is used is the client integration's: requests, httpx and
   aiohttp try the entries in order and move on when one does not connect
   (the last error is raised; a DIRECT entry reached is direct); a client
-  that sends once takes the first reachable entry through
-  `proxylib.Probed(proxy_map())`, which raises `NoReachableProxyError` (a
+  that sends once, `syshttp.client` among them, takes the first reachable
+  entry through `proxylib.Probed(proxy_map())`, which raises
+  `NoReachableProxyError` (a
   `LookupError`) when none answers and the list holds no DIRECT.
 
-## Session (`syshttp.session`, extra `session`)
+## Client (`syshttp.client`)
+
+A synchronous HTTP client on the standard library (`http.client`, `ssl`): no
+third-party package, `requests` included. It routes by the proxy map
+(`syshttp.proxy`), verifies with the system's TLS, and keeps the cookies and
+tokens of each origin. `import syshttp.client` loads `http.client`, `ssl`,
+proxylib and sslcontext; `import syshttp` does not.
 
 ```python
-def new_session(*, user_agent: str | None = None, proxies: dict | None = None,
-                verify: bool | str | Path = True, retries: int = 3, backoff: float = 1,
-                status_forcelist: Iterable[int] = TRANSIENT_STATUSES,
-                cookies: bool | str | CookieJar = False, tokens: bool | str | TokenJar = False,
-                auth_provider: AuthProvider | None = None, env: HTTPEnv | None = None,
-                ssl_context: ssl.SSLContext | None = None,
-                proxy_ssl_context: ssl.SSLContext | None = None,
-                cookie_hosts: Iterable[Iterable[str]] | None = None) -> requests.Session
-COOKIE_HOSTS = "COOKIE_HOSTS"   # setting name, as `SYSHTTP_COOKIE_HOSTS`
+class HTTPClient:
+    headers: dict
+    timeout: float | tuple | None
+    deadline: float | None
+    user_agent: str
+    def __init__(self, transport=None, *, headers=None, timeout=(10, 60), deadline=None, user_agent=None,
+                 env: HTTPEnv | None = None, proxymap=None, ssl_context=None, proxy_ssl_context=None,
+                 verify: bool | str | PathLike = True,
+                 cookies: bool | str | CookieJar | None = False, tokens: bool | str | TokenJar | None = False,
+                 auth_provider: AuthProvider | None = None, retries: int = 3, backoff: float = 1,
+                 status_forcelist: Iterable[int] = TRANSIENT_STATUSES,
+                 cookie_hosts: Iterable[Iterable[str]] | None = None)
+    transport                                   # the transport in use
+    def request(self, method, url, *, data=None, headers=None, stream=False, allow_redirects=None,
+                timeout=..., deadline=..., auth=None) -> HTTPResponse
+    def redirect(self, method, url, resp, *, headers=None, stream=False, timeout=..., deadline=...,
+                 auth=None) -> HTTPResponse
+    def close(self) -> None
+
+def fetch(url, method="GET", *, headers=None, data=None, json=None, timeout=DEFAULT_TIMEOUT,
+          client=None, transport=None, reauth=None, **client_options) -> HTTPResponse
+
+DEFAULT_TIMEOUT = (10, 60)
+MAX_REPLY_BYTES = 8388608
+CA_BUNDLE = "CA_BUNDLE"; COOKIE_HOSTS = "SYSHTTP_COOKIE_HOSTS"
+DEFAULT_TRANSPORT = "SYSHTTP_DEFAULT_TRANSPORT"      # setting names
 ```
 
-- One transport adapter, `ProxyAdapter` (a subclass of proxylib's
-  `ProxyMapAdapter` that adds only the TLS below), routes every request,
-  including a bare `session.send()` and every redirect hop, by
-  `proxy.proxy_map(env=env)`: the environment as it is then, and the
-  system's answer host by host. `adapter.route(url)` returns the entries it
-  will try (`session.get_adapter(url).route(url)`). They are tried in order,
-  the next when one does not connect; the last error is raised
-  (`requests.exceptions.ProxyError` for a proxy). The environment's
-  `HTTP_PROXY` cannot win through `trust_env`. A prefix gateway's response
-  keeps the caller's request and URL, so redirects and cookies belong to the
-  target.
-- `proxies=` given by you is handed to requests unchanged: the map then has
-  no opinion, and no syshttp credential is added.
-- `verify=True` verifies through `tls.os_ssl_context()` (the OS verifier)
-  and names no CA file. A path, or the `CA_BUNDLE` setting (read at each
-  request), names a bundle; requests' own `REQUESTS_CA_BUNDLE` /
-  `CURL_CA_BUNDLE` are not read. `verify=False` is left to requests.
-- A client certificate passed as `cert=` (a path, or a `(certificate, key)`
-  pair) with `verify=True` is loaded into a context of the session's own,
-  cached per file and modification time, never into the shared OS context
-  and so never into another session's. Without `ssl_context`; beside it,
-  `cert=` raises `ValueError`: load the identity into the context.
-- `ssl_context` is used as given for every https origin. Its own
-  `verify_mode`, trust store, client identity (mutual TLS, including a key
-  held in an OS keystore), ciphers and protocol versions decide. The session
-  never changes it. Beside it, `verify` must stay `True`, or `new_session`
-  raises `ValueError`; so does a request-level `verify=` (`False`, or a
-  bundle), which includes `fetch.request_text(verify=...)`. A non-`SSLContext` raises
-  `TypeError`. `proxy_ssl_context` does the same for the TLS to an `https://`
-  proxy and to an `https://` URL-prefix gateway: the gateway never gets
-  `ssl_context` or a client certificate meant for the origin, and
-  `CA_BUNDLE` is not consulted (without
-  `proxy_ssl_context`, the system's verifier).
-  The `sslcontext` package builds such contexts (keystore identities,
-  PEM/PKCS#12 from memory), but any `ssl.SSLContext` works.
-- `cookies` / `tokens`: `True` uses a file jar under `jar.store_root(env=env)`
-  keyed by the origin's host. A string names one key for every host. A jar
-  object is used as given. A token is sent as a per-request `Authorization`:
-  `Bearer <token>`, or verbatim when it already names a scheme. An explicit
-  `Authorization` header or `auth=` wins. A token containing a CR, LF or NUL
-  raises `ValueError` naming the jar key, never the value.
-- `cookie_hosts`: groups of hosts the user declares to be one for cookies
-  (`cookies.host_aliases`); default `SYSHTTP_COOKIE_HOSTS`, read when the session
-  is built (groups split by `;`, hosts by `,`:
-  `app.example.com,app.example.net;wiki,wiki.corp.example`); `[]` for none.
-  A malformed variable raises `ConfigurationError` naming it; a malformed
-  argument `ValueError` (`TypeError` for a group given as one string).
-  Within a group:
+- **`request(method, url, *, data=None, headers=None, stream=False,
+  allow_redirects=None, timeout, deadline, auth=None)`** returns the final
+  `HTTPResponse`. `data` is `bytes`, `str` (UTF-8), a binary file or an
+  iterable of `bytes`; one that is not `bytes` cannot be sent twice, so it is
+  not sent again after a redirect, a dropped connection or a retry. `auth` is a
+  `(user, password)` pair sent as `Authorization: Basic`, or a `str` sent as
+  the `Authorization` value (`"Bearer <token>"`), to the origin of `url`
+  unless a header names an `Authorization`; it beats a token of the client. A
+  `url` that carries credentials, a URL or header value with a control
+  character (CR and LF included) and another scheme than `http:` or `https:`
+  are `ValueError`, before anything is sent. A status of 400 or more is
+  **not** an error: it is the reply (`raise_for_status()`). With
+  `stream=False` the body has been read when `request()` returns, and one
+  that decodes to more than `MAX_REPLY_BYTES` is `OSError(EFBIG)`; with
+  `stream=True` the caller reads the body and closes the response.
+- **Headers and time.** `headers` of the client and of the call are merged by
+  name (case-blind, a value of `None` removes the name) over
+  `User-Agent: <user_agent>` (default `syshttp/<version>`) and `Accept: */*`.
+  Every request gets `timeout=(10, 60)` seconds (`connect`, `read`) unless
+  the client or the call gives one; `timeout=None` waits without limit.
+  `timeout` bounds each wait; `deadline` (seconds, `None` for none) bounds the
+  whole request, redirects, retries and the reading of the body included, and
+  `TimeoutError` is raised once it has passed. A call's value replaces the
+  client's; a `deadline` that is not a number or `None` is `TypeError`, one
+  that is not positive `ValueError`. `repr()` of a client shows no header.
+- **Redirects.** `GET`, `HEAD` and `OPTIONS` follow up to 30 redirects (a
+  `303` becomes a `GET`); `allow_redirects=False` returns the first answer. A
+  redirect whose `Location` is missing or cannot be requested is
+  `OSError(EIO)`. A redirect that changes the scheme, host or port drops
+  `Authorization` for that hop and every later one, and nothing else: every
+  other header, a `Cookie` the caller named included, goes to the new host as
+  well, so keep a secret in `Authorization`. Every other method is sent without
+  following: a 307 or 308 (for `PROPFIND` also a 301, 302 or 303) to the same
+  scheme, host and port is sent once more with the same method, headers and
+  body, and any other 3xx, a redirect to another origin or a second redirect
+  is `OSError(EIO)` naming the status and the `Location` (userinfo, query and
+  fragment removed). `redirect(method, url, resp, ...)` sends `method` to where
+  `resp`, the answer to a request for `url` made with `allow_redirects=False`,
+  redirects to, with the same rules; cookies apply to every hop, the token,
+  hooks and retries belong to `request()`.
+- **Routing.** Each request asks the proxy map (`proxymap`, any proxylib
+  `ProxyMap` or value `ProxyMap()` builds one from; default
+  `proxy.proxy_map(env=env)`) for the entries it may use and takes the first
+  that accepts a TCP connection (`proxylib.Probed`; with no entry reachable and
+  no `DIRECT`, `proxylib.NoReachableProxyError`). A direct entry connects to
+  the origin; an `http:` or `https:` proxy gets an absolute-form request for
+  an `http:` origin and a `CONNECT` for an `https:` one, an `https:` proxy
+  over TLS and the origin's TLS inside it; a `prefix+http(s)` gateway gets
+  `<gateway><path><URL>` with its credential as a header of that request, and
+  the response keeps the URL asked for. A proxy's headers (its credential) go
+  to the proxy only: in the `CONNECT`, or on the plain-http request to it,
+  never through a tunnel. SOCKS entries are skipped; an answer with nothing
+  else is `proxylib.UnsupportedProxyError`. A map with no opinion for a URL
+  (`{}` for every URL) means a direct connection and the settings are not
+  read. Every hop of a redirect is routed again; a connection to a proxy this
+  thread already holds is reused without probing it. A `proxymap` of your own
+  adds no `SYSHTTP_PROXY_AUTH` credential. A malformed proxy setting
+  (`ConfigurationError`) is refused when the client is made.
+- **TLS.** `https:` origins are verified against `ssl_context` when given,
+  used as given and never changed (its `verify_mode`, trust store, client
+  identity, ciphers and protocol versions decide; `verify` must stay `True`
+  beside it, else `ValueError`; a non-`SSLContext` is `TypeError`); else
+  against the CA bundle that `verify=<path>` or the `CA_BUNDLE` setting (read
+  at each new connection, through the prefixes) names, a context trusting only
+  that file (a file that cannot be read is `ConfigurationError` naming where
+  the path came from); else against the system's context
+  (`tls.os_ssl_context()`: the OS verifies, and a server that asks for a client
+  certificate gets one from the OS store). `verify=False` turns verification
+  off (a warning is logged under the `syshttp.client` logger when the client's
+  transport is made). requests' own `REQUESTS_CA_BUNDLE` / `CURL_CA_BUNDLE` are
+  not read. An `https:` proxy or gateway is spoken to with
+  `proxy_ssl_context`, else the system's context; the gateway never gets the
+  origin's `ssl_context` or client certificate. There is no per-request
+  `verify` or client certificate: build another client or load the identity
+  into the context.
+- **Cookies.** A client keeps the cookies its responses set, per origin host
+  and never per proxy or gateway, on every hop: parsed as RFC 6265 reads them
+  (`cookies.set_cookie_specs`), sent as `cookies.cookie_applies` decides
+  (longer paths first), expired and deleted ones dropped. A `Cookie` header the
+  call or client names replaces the jar's for that request. They live in
+  memory for the client's life; `cookies=True` also keeps them in a file jar
+  under `jar.store_root(env=env)` by host, a string names one key for every
+  host, a jar object is used as given. A host's rows are loaded from the jar
+  the first time the host is asked for, and written back only when they differ
+  from what was loaded or written last; a jar that fails to read or write is
+  ignored. `cookie_hosts` (default `SYSHTTP_COOKIE_HOSTS`, read when the client
+  is made: groups split by `;`, hosts by `,`:
+  `app.example.com,app.example.net;wiki,wiki.corp.example`; `[]` for none)
+  declares groups of hosts that are one for cookies (`cookies.host_aliases`):
   - a host-only cookie a member sets, and one whose `Domain` names a member,
     belongs to the group's first host (stored there, kept in its jar file);
   - a request to any member carries what a request to any member would,
@@ -223,22 +287,211 @@ COOKIE_HOSTS = "COOKIE_HOSTS"   # setting name, as `SYSHTTP_COOKIE_HOSTS`
   - a member deletes such a cookie as the first host would;
   - a `Domain` outside the group is judged on the host that sent it, so a
     group never lets a host set a cookie for a domain that is not its own.
+
   Without groups the RFC 6265 rule stands: no host sets or deletes another
   host's cookie. Hosts are names or IP addresses, without a port; a host in
-  two groups raises. A by-host jar file of a member other than the first is
-  not read. Tokens stay per host.
-- `user_agent` replaces the session's `User-Agent` header.
-- A status in `status_forcelist` that outlasts `retries` is returned as the
-  response (`raise_on_status=False`), as plain requests returns it; a
-  connection that never succeeds still raises.
-- Cookies, tokens, `_PY` hooks and `auth_provider` belong to `session.request`
-  (`get`, `post`, ...) only. A bare `session.send(prepared)` gets the proxy
-  decision and TLS (the adapter) and none of them.
-- `_PY` URL hooks run inside `session.request`, on the caller's URL. Requests
-  a hook makes through the session do not run hooks again; the guard is per
-  thread, so another thread's requests still run them.
-- `auth_provider.ensure(session, url)` runs before each request, and its
-  errors are swallowed.
+  two groups raises `ValueError`, a malformed variable `ConfigurationError`
+  naming it, a group given as one string `TypeError`.
+- **Tokens.** `tokens=True` reads `Authorization` values from file jars under
+  `jar.store_root(env=env)` keyed by the origin's host (read at each request),
+  a string names one key for every host, a jar object is used as given. A
+  token is a per-request `Authorization`: `Bearer <token>`, or verbatim when it
+  already names a scheme, never a client header, so it follows no redirect to
+  another origin. An explicit `Authorization` header or `auth=` wins. A token
+  containing a CR, LF or NUL is `ConfigurationError` naming the jar key, never
+  the value.
+- **Auth provider and hooks.** In `request()` (not `redirect()`),
+  `auth_provider.ensure(client, url)` runs first and its errors are swallowed;
+  then the `_PY` hooks (see "URL hooks") run on the caller's URL with the
+  keyword arguments the call gave (`data`, `headers`, `stream`,
+  `allow_redirects`, `timeout`, `deadline`, `auth`) as a mutable `kwargs`; one
+  that sets another name is `TypeError`. A hook may return a response, which
+  is used instead of sending. A request a provider or a hook makes through the
+  client runs neither again; the guard is per thread, so another thread's
+  requests still run them.
+- **Retries.** A status in `status_forcelist` (default `TRANSIENT_STATUSES`),
+  or a failed connection (`ConnectionError`, not a timeout, not
+  `NoReachableProxyError`), is sent again up to `retries` times (default 3) for
+  `GET`, `HEAD`, `OPTIONS`, `PUT`, `DELETE`, `TRACE` and `PROPFIND` with a body
+  that can be sent twice. None waits before the first retry, then `backoff`
+  seconds doubled each time, never less than the reply's `Retry-After`, at most
+  120 seconds; the `deadline` bounds the sum. A status that outlasts the
+  retries is returned, not raised; a connection that never succeeds raises
+  its last error. `retries=0` sends once.
+- **Close.** `close()` (or leaving a `with` block) closes a transport the
+  client made, never one it was given; a closed client makes a new one when
+  used again.
+
+```python
+class HTTPResponse:
+    status: int
+    reason: str
+    headers: Headers
+    url: str
+    def __init__(self, status, reason, headers, url, body=b"", *, decode=True): ...
+    def read(self, size=-1): ...
+    def iter_bytes(self, chunk_size=65536): ...
+    def buffered(self): ...
+    content: bytes                                   # property
+    def text(self, encoding=None, errors="replace") -> str
+    def json(self) -> Any
+    def close(self): ...
+
+class Headers:                                       # read-only Mapping, names case-blind
+    def get_all(self, name): ...
+
+class HTTPStatusError(Exception):
+    response: HTTPResponse
+
+def raise_for_status(resp): ...
+def read_limited(resp, what, limit=None): ...
+def json_body(resp, what, limit=None): ...
+def drop_body(resp, limit=None): ...
+def peer_text(text, limit=120): ...
+def split_userinfo(url): ...
+def is_redirect(resp): ...
+```
+
+- **`HTTPResponse`**: `status`, `reason`, `headers` (names compare without
+  case, a name sent twice reads as `"a, b"` and `headers.get_all()` lists them;
+  `repr()` shows names only), `url` (the URL requested, without fragment, an
+  empty path `/`; through a gateway still the URL asked for), `read(size=-1)`,
+  `iter_bytes(chunk_size)`, `buffered()` (reads the rest of the body into
+  memory, closes the connection and returns the response, which stays
+  readable), `close()` and a context manager. A `gzip` or `deflate` body is
+  decoded, in steps of at most 256 KiB, unless the request named an
+  `Accept-Encoding` of its own (`identity` counts as none); `headers` stay as
+  received, so `Content-Length` counts the encoded bytes. A body that ends
+  before the length the server stated, a chunked body cut short and a coded
+  body that is not valid are `OSError(EIO)`, never a shorter read.
+  `content` is the rest of the decoded body, read on first use (at most
+  `MAX_REPLY_BYTES`, else `OSError(EFBIG)`) and kept, so `content`, `text()`
+  and `json()` agree however often they are used; bytes already taken with
+  `read()` are not in it. `text()` decodes with `encoding`, else the
+  `charset` of `Content-Type`, else UTF-8, replacing what does not decode.
+  `json()` parses it (`None` for an empty body); a body that is not JSON is
+  `ResponseError` naming the status. A response built from `bytes` by a hook
+  or a fake transport has all of this.
+- `raise_for_status(resp)` raises `HTTPStatusError` (holding `response`) for a
+  status of 400 or more. `read_limited(resp, what, limit=None)` is the whole
+  decoded body, at most `limit` bytes (default `MAX_REPLY_BYTES`, 8 MiB after
+  decoding; assign `syshttp.client.MAX_REPLY_BYTES` to allow more, it is read
+  each time): more is `OSError(EFBIG)` naming `what`, and the connection is
+  closed; `json_body()` is that, parsed (`ValueError` when it is not JSON).
+  `drop_body(resp, limit=None)` gives up the body of a reply nobody looks at: it
+  is read up to `limit` bytes so the connection can serve the next request,
+  and `resp` is closed. `peer_text(text, limit=120)` is text from the other end
+  (a reason phrase, a `Location`) as an error message may show it: control and
+  bidirectional characters escaped, cut to `limit`. `split_userinfo(url)` is
+  `(url_without_userinfo, (user, password) | None)`, the parts the octets their
+  percent-escapes stand for; `is_redirect(resp)` says whether a reply is a
+  301, 302, 303, 307 or 308 that names a `Location`.
+- **`fetch(url, method="GET", *, headers=None, data=None, json=None,
+  timeout=DEFAULT_TIMEOUT, client=None, transport=None, reauth=None,
+  **client_options)`** sends one request and returns the `HTTPResponse` with
+  its body read whole (`MAX_REPLY_BYTES` bounds it), whatever the status: take
+  `.status`, `.headers`, `.content`, `.text()` or `.json()` from it. The return
+  type never depends on an argument. `data` is bytes, text, a mapping
+  (form-encoded, `Content-Type: application/x-www-form-urlencoded`) or a binary
+  file; `json` is a value sent as JSON (`Content-Type: application/json`;
+  `None` sends nothing); both is `ValueError`. It sends through `client` when
+  given, left open, else through a new `HTTPClient(transport, **client_options)`
+  closed after the call: `transport` is any object implementing the transport
+  protocol (`None`: the `SYSHTTP_DEFAULT_TRANSPORT` setting's, else syshttp's
+  own) and `client_options` are the other keywords of `HTTPClient`. A `client`
+  beside `transport` or `client_options` is `ValueError`: a given client has
+  them already. `timeout` is for this call, whatever the client's own is.
+  `reauth` is called as `reauth(client, url)` (an object with
+  `ensure(client, url)`, an `AuthProvider`, through that) once after a 401 or
+  403, and the request is sent one more time; its errors are the caller's, and
+  the body must be one that can be sent twice. `syshttp.fetch` is the same
+  function: the root imports the client only when it is asked for.
+
+### The transport protocol and the default transport (`syshttp.client`)
+
+```python
+class Transport(Protocol):
+    def send(self, method, url, *, headers, body=None, timeout, stream=False) -> HTTPResponse: ...
+    def close(self) -> None: ...
+
+class PreparedRequest(NamedTuple):
+    method: str; url: str; headers: dict[str, str]; body: Any
+    timeout: tuple[float | None, float | None]; decode: bool
+
+def prepare_request(method, url, *, headers, body=None, timeout) -> PreparedRequest
+
+class HTTPTransport:
+    def __init__(self, *, proxymap=None, env=None, ssl_context=None, proxy_ssl_context=None, verify=True)
+    def send(self, method, url, *, headers, body=None, timeout, stream=False) -> HTTPResponse
+    def close(self) -> None
+```
+
+`HTTPClient(transport=...)` takes any object with `send()` (a transport that
+calls `requests`, `httpx`, a fake in a test); the client owns redirects,
+credentials, cookies, tokens, hooks, retries and the deadline above it, so a
+transport does none of them. Without one the client builds the transport the
+`SYSHTTP_DEFAULT_TRANSPORT` setting names (read through the prefixes when the
+client is made): an object reference `module:attr` or `<file>.py:attr` (a
+dotted `attr` is allowed), resolved as a `_PY` hook is (`hooks.load_object`).
+The object is the transport when it has `send()`; a class or factory (anything
+else callable) is called with no arguments to make one, which the client then
+closes. A value that cannot be imported, resolved or called, or whose result
+has no `send()`, is `ConfigurationError` naming the variable, never a silent
+fallback; `proxymap`, `ssl_context`, `proxy_ssl_context` and `verify` beside a
+setting, or beside a `transport` of your own, are refused. Precedence: an
+explicit `transport=`, then the setting, then `HTTPTransport`. The setting
+names code to import: never let an untrusted party set the environment of a
+process using syshttp.
+
+- **The contract.** `send()` makes exactly one request: it follows no
+  redirect, adds no credentials of the caller's and retries nothing but what is
+  said below. `body` is `None`, `bytes`, a binary file or an iterable of
+  `bytes` (never `str`: `TypeError`), sent under a `Content-Length` when its
+  length is known without reading it (`bytes`, a list or tuple of `bytes`, a
+  seekable file, a regular file), else `Transfer-Encoding: chunked`; a
+  `Content-Length` in `headers` is trusted (a longer body is cut there, a count
+  larger than a known length or not a number is `ValueError`, a body that runs
+  out first is `OSError(EIO)`). `timeout` is seconds, a `(connect, read)` pair
+  or `None`; the read half bounds each wait on the server. With `stream=False`
+  the body has been read when `send()` returns; with `stream=True` it is read
+  from the response, which the caller closes. A transport raises only
+  `TimeoutError`, `ConnectionError`, `ssl.SSLError`, `ValueError` (before
+  anything is sent: a header or URL with a control character, a URL with
+  credentials, another scheme) or else `OSError(EIO)`; no third-party
+  exception and no URL or header value in its text. A reply below 200 is never
+  the one it returns. It builds the answer as `HTTPResponse(status, reason,
+  headers, url, body, decode=...)` with `body` as `bytes` or an object with
+  `read(amount)` and `close()`.
+- **`prepare_request(method, url, *, headers, body=None, timeout)`** is the
+  arguments of `send()` as the contract reads them, so a transport that starts
+  with it refuses what `HTTPTransport` refuses and frames a body the same way:
+  `method` upper-cased, the fragment dropped from `url`, `headers` a `dict` of
+  text values with the `Content-Length` of a body whose length is known (`0`
+  for a `PATCH`, `POST` or `PUT` without one) and `Accept-Encoding: gzip,
+  deflate` unless the caller named an encoding, `body` an object that yields
+  exactly `Content-Length` bytes or an iterable to send chunked, `timeout` the
+  pair, `decode` what to pass as `HTTPResponse(..., decode=decode)`. It raises
+  `ValueError` for a method or header name that is not a token, a value or
+  URL with a control character, a URL with credentials or another scheme, a
+  `Content-Length` that is not a count of bytes or exceeds the body, and a
+  timeout that is not a positive finite number, `None` or a pair of them;
+  `TypeError` for a `str` body. No message quotes the URL or a header value.
+- **What `HTTPTransport` does that another transport must do itself** (the
+  client does none of it): routing by the proxy map (`proxymap`, `env`: probing,
+  failover, proxies, `CONNECT`, gateways, a proxy's credentials), TLS
+  verification (`ssl_context`, `proxy_ssl_context`, `verify`, `CA_BUNDLE`, the
+  system's context), connection reuse (one idle connection per route and
+  thread, at most 8, closed when the thread ends or on `close()`; reused only
+  if the server has not closed it or sent bytes on it; an idempotent request
+  that fails before any byte of a reply on a reused connection is sent once
+  more on a new one, any other request reuses a connection only if it carried
+  a reply within the last second), skipping interim (1xx) replies (at most 8),
+  decoding `gzip` and `deflate`. A transport written on another library
+  therefore gets the library's own proxy and TLS behaviour, not syshttp's,
+  unless it implements them; it can still be used by `fetch(transport=...)`.
+  `HTTPTransport` adds to the contract's exceptions
+  `proxylib.NoReachableProxyError`, `proxylib.UnsupportedProxyError` and
+  `ConfigurationError`.
 
 ## Exceptions (`syshttp.exceptions`)
 
@@ -249,43 +502,18 @@ class HookError(SysHTTPError, RuntimeError)
 class ResponseError(SysHTTPError, ValueError)
 ```
 
-- `SysHTTPError` is the base of what goes wrong at run time. proxylib's and
-  requests' own errors (`NoReachableProxyError`, `ProxyParseError`,
-  `requests.exceptions.*`) pass through as they are.
+- `SysHTTPError` is the base of what goes wrong at run time. proxylib's own
+  errors (`NoReachableProxyError`, `UnsupportedProxyError`, `ProxyParseError`)
+  pass through as they are.
 - `ConfigurationError`: a setting or stored credential that cannot be used
   (a malformed `SYSHTTP_PROXY_TYPE`, a regular expression that does not compile,
   a hook that cannot be loaded, a token with a line break, a malformed
   `SYSHTTP_PREFIX`). The message names the variable or key, never a secret.
 - `HookError`: a `_PY` hook failed; the hook's own exception is `__cause__`.
-- `ResponseError`: a body that is not the JSON `request_json` was asked for.
+- `ResponseError`: a body that is not the JSON `HTTPResponse.json()` was asked for.
 - A caller's own mistake is a plain `ValueError` or `TypeError`, not one of
   these: a malformed `prefixes=` argument, `verify=False` beside `ssl_context`,
-  `cert=` beside `ssl_context`, an unknown patch target.
-
-## Fetch helpers (`syshttp.fetch`, extra `session`)
-
-```python
-def request_text(session, method, url, *, headers=None, data=None, json_body=None, timeout=60, verify=None) -> tuple[int, str]
-def request_json(session, method, url, *, ...same...) -> tuple[int, Any]
-def request_with_reauth(session, method, url, *, ...same..., auth_fail_statuses=(401, 403), reauth_cb=None, auth_provider=None) -> tuple[int, str]
-def request_text_auto(method, url, *, session=None, headers=None, data=None, json_body=None, timeout=60, **session_options) -> tuple[int, str]
-def request_json_auto(method, url, *, ...same...) -> tuple[int, Any]
-```
-
-- `timeout` is seconds or a `(connect, read)` pair, as requests takes it.
-- A status is never an exception: a status in the session's `status_forcelist`
-  that outlasts its retries comes back as `(status, text)`. A connection that
-  never succeeds, or a timeout, raises requests' exception.
-- `request_json` returns `(status, None)` for an empty body. A body that is
-  not JSON raises `ValueError` naming the status.
-- `verify=` is requests' per-request value; beside a session's `ssl_context`
-  it raises `ValueError`.
-- `request_with_reauth` retries once after a status in `auth_fail_statuses`,
-  calling `auth_provider.ensure()` and then `reauth_cb()` first.
-- The `*_auto` helpers send through `session` when it is given (left open),
-  else through `new_session(**session_options)`, which they close after the
-  call: `session_options` is any keyword of `new_session` (`env`, `proxies`,
-  `retries`, `ssl_context`, ...), and the defaults are `new_session`'s.
+  a `client` beside `client_options` in `fetch()`, an unknown patch target.
 
 ## Jars (`syshttp.jar`)
 
@@ -314,9 +542,8 @@ class CookieJar(Protocol); class TokenJar(Protocol)   # __getitem__, __setitem__
   write.
 - `get()` returns the default on any read error. Token values are never
   logged.
-- A session saves a host's cookie file only when its cookies differ from
-  those last loaded or saved, and never after failing to read its own. A
-  token file is read at every request.
+- A client saves a host's cookie file only when its cookies differ from
+  those last loaded or saved. A token file is read at every request.
 
 ## Cookies (`syshttp.cookies`)
 
@@ -324,15 +551,12 @@ class CookieJar(Protocol); class TokenJar(Protocol)   # __getitem__, __setitem__
 @dataclass(frozen=True)
 class CookieSpec: domain: str; path: str; secure: bool; expires: int | None; name: str; value: str; http_only: bool = False; subdomains: bool = False
 def load_netscape(path: Path) -> list[CookieSpec]
-def save_netscape(session_cookies: Iterable[CookieLike], path: Path) -> None
+def save_netscape(cookies: Iterable[CookieLike], path: Path) -> None
 def cookie_applies(cookie: CookieSpec, url: str, now: float | None = None) -> bool
 def set_cookie_specs(values: Iterable[str], default_domain: str, now: float | None = None, *,
                      request_path: str = "/",
                      aliases: Mapping[str, str] | None = None) -> list[tuple[CookieSpec, bool]]
 def domain_covers(domain: str, host: str) -> bool
-def apply_to_session(session, cookies: Iterable[CookieSpec]) -> None
-def merge_set_cookie_headers(session, response, *, aliases: Mapping[str, str] | None = None) -> None
-def host_only_policy(aliases: Mapping[str, str] | None = None) -> http.cookiejar.DefaultCookiePolicy
 def host_aliases(groups: Iterable[Iterable[str]]) -> dict[str, str]
 HTTP_ONLY_PREFIX = "#HttpOnly_"
 MAX_COOKIE_AGE = 400 * 24 * 3600
@@ -365,16 +589,6 @@ MAX_COOKIE_AGE = 400 * 24 * 3600
     recognised, so a site there can set a `Domain` cookie for it.
   - A cookie with no `Path` gets the directory of `request_path` (the
     request's path; RFC 6265 section 5.1.4: `/app/login` is `/app`).
-- `apply_to_session` loads rows into a requests session with their flags. A
-  row that is not a domain cookie (no leading dot, flag `FALSE`) stays on its
-  host, `localhost` and other single-label hosts included. `new_session`
-  gives its session `host_only_policy()`, which this needs: requests'
-  default also sends such a cookie to subdomains.
-- `merge_set_cookie_headers(session, response)` applies the deletions that
-  requests' own extraction misses (a `Domain` that differs from how the
-  cookie was stored, an empty value), for the response and its redirect
-  hops. It sets nothing: requests stores each cookie once, against the URL
-  the caller asked for.
 - `FileCookieJar` keeps `HttpOnly` and the include-subdomains flag. A
   by-host file holds every cookie that applies to its host, one a host set
   for a parent domain (`Domain=example.com` from `www.example.com`) included.
@@ -382,15 +596,14 @@ MAX_COOKIE_AGE = 400 * 24 * 3600
   brackets and a trailing dot removed) to the group's first host; a group of
   one host is no alias. A host that is not a name or an IP address (a port,
   a path, a blank) or that is in two groups raises `ValueError`; a group
-  given as one string, `TypeError`. `set_cookie_specs`,
-  `merge_set_cookie_headers` and `host_only_policy` take the mapping as
-  `aliases` and apply `new_session`'s `cookie_hosts` rules.
+  given as one string, `TypeError`. `set_cookie_specs` takes the mapping as
+  `aliases`, and `HTTPClient` applies its `cookie_hosts` rules with it.
 
 ## URL hooks (`syshttp.hooks`)
 
 ```
 SYSHTTP_HOOKS_<KEY>=<regex>                re.search against the caller's URL
-SYSHTTP_HOOKS_<KEY>_PY=<module:callable>   syshttp calls callable(session, method, url, kwargs)
+SYSHTTP_HOOKS_<KEY>_PY=<module:callable>   syshttp calls callable(client, method, url, kwargs)
 SYSHTTP_HOOKS_<KEY>_CURL=<command>         a curl front end runs this in its place, its argv appended
 ```
 
@@ -399,15 +612,18 @@ class Hook:  key, pattern, curl, py, variable; matches(url) -> bool
 def hooks_from_env(*, env=None) -> list[Hook]
 def matching(url: str, *, kind: str | None = None, env=None) -> list[Hook]
 def skipped(*, env=None) -> set[str]
-def call_py_hooks(session, method, url, kwargs, *, env=None) -> requests.Response | None
+def call_py_hooks(client, method, url, kwargs, *, env=None) -> HTTPResponse | None
 def load_callable(spec: str) -> PyHook
+def load_object(spec: str, what: str = "an object") -> Any
 def split_command(value: str) -> list[str]
 def curl_command(hook: Hook, python: str | None = None) -> list[str]
 def wrapper_environment(hook: Hook, url: str, entry: str, *, env=None) -> dict[str, str]
 ```
 
 - Hooks run in KEY order. A `_PY` hook returning non-`None` is used as the
-  response and ends the chain. `kwargs` is mutable. A hook declared without
+  response and ends the chain; the response is an `HTTPResponse`. `kwargs`
+  holds the keyword arguments the `HTTPClient.request()` call gave and is
+  mutable (a name `request()` does not take is `TypeError`). A hook declared without
   a `_PY` or `_CURL` target is ignored, and so is a target without a
   pattern, or a blank one.
 - KEYs are compared without regard to case (`Hook.key` is upper-case, as
@@ -415,7 +631,8 @@ def wrapper_environment(hook: Hook, url: str, entry: str, *, env=None) -> dict[s
   hook, and `HOOK_SKIP=mykey` suppresses it.
 - `SYSHTTP_HOOK_SKIP` (a comma list of KEYs) suppresses hooks.
 - `load_callable` accepts `module:attr` or `<file>.py:attr` (`attr` may be
-  dotted). A file is loaded once per process, by its resolved path, as a
+  dotted); `load_object` is the same lookup without the callable check, the
+  loader `SYSHTTP_DEFAULT_TRANSPORT` shares. A file is loaded once per process, by its resolved path, as a
   `module` is imported once: its module-level state lives on between requests
   and a later edit is not picked up. Two files named alike are two modules.
 - A failing `_PY` hook raises `RuntimeError` naming the variable, the target,
@@ -454,8 +671,10 @@ def retry_after(headers: Iterable[tuple[str, str]], now: float | None = None) ->
   replace. With `cafile`/`capath` it is a plain `ssl` context trusting only
   them, offering no store certificate.
 - `os_ssl_context()` is shared for `OS_CONTEXT_MAX_AGE` seconds, because
-  urllib3 pools by context object. Never load a client certificate into it;
-  use `new_os_context(client_certificates=False)`.
+  the clients that pool connections by context object (urllib3) would never
+  reuse one otherwise. It is what `syshttp.client` verifies with by default.
+  Never load a client certificate into it; use
+  `new_os_context(client_certificates=False)`.
 - `retry_after` reads a number of seconds (the digits `0-9` only) or an HTTP
   date, a date without a zone being UTC. It returns `None` when the header
   is absent or unreadable.
@@ -541,13 +760,14 @@ def patched() -> tuple[str, ...]
 | `SYSHTTP_PROXY_AUTH_HEADER` | the header name `SYSHTTP_PROXY_AUTH` rides in | `Proxy-Authorization` |
 | `SYSHTTP_PROXY_TYPE` | `connect` or `prefix[:/endpoint]` | `connect` |
 | `SYSHTTP_HOME` | the jar root | the per-user state directory |
-| `SYSHTTP_COOKIE_HOSTS` | groups of hosts that share cookies: hosts split by `,`, groups by `;` (`new_session`) | none |
+| `SYSHTTP_COOKIE_HOSTS` | groups of hosts that share cookies: hosts split by `,`, groups by `;` (`HTTPClient`) | none |
+| `SYSHTTP_DEFAULT_TRANSPORT` | the transport of an `HTTPClient` (and `fetch()`) given none: `module:attr` or `<file>.py:attr`, an object with `send()` or something that makes one. It names code to import | syshttp's `HTTPTransport` |
 | `SYSHTTP_IMPORTPATCH` | which client libraries are patched on import (`1` for all, or `:`-separated names: `requests`, `urllib`, `httpx`, `aiohttp`, `pip`) | none |
 | `SYSHTTP_HOOKS_<KEY>` (+ `_PY`, `_CURL`) | a URL hook | none |
 | `SYSHTTP_HOOK_SKIP` | KEYs of hooks not to run, comma list | none |
 | `HTTP_PROXY`, `HTTPS_PROXY`, `FTP_PROXY`, `WS_PROXY`, `WSS_PROXY`, `ALL_PROXY` (either case, lowercase first) | the machine's proxy, per scheme | none |
 | `NO_PROXY` / `no_proxy` | hosts that go direct | none |
-| `CA_BUNDLE` | the CA bundle a session's `verify=True` uses | the OS verifier |
+| `CA_BUNDLE` | the CA bundle a client's `verify=True` uses (`REQUESTS_CA_BUNDLE` / `CURL_CA_BUNDLE` are not read) | the OS verifier |
 
 Each of these is read under every prefix of `SYSHTTP_PREFIX`. A `_CURL`
 hook's wrapper runs with `SYSHTTP_HOOK_URL`, `SYSHTTP_HOOK_KEY`,
@@ -570,9 +790,11 @@ proxylib's own `PROXYLIB_IMPORTPATCH` and `PROXYLIB_AUTOPROXY`.
 - A malformed `SYSHTTP_PROXY_TYPE` is harmless until `SYSHTTP_PROXY` is set.
 - Pass `root=` to keep jar files out of the user's state directory.
 - A client certificate loaded into the context you pass is used for every
-  https host the session talks to, redirects included. Give a session an
+  https host the client talks to, redirects included. Give a client an
   identity only for hosts that should see it.
-- With `verify=False`, urllib3 warns (`InsecureRequestWarning`) as it does
-  for any requests session: `new_session()` changes no warning filter.
-- A `_PY` hook names code to import. Never let an untrusted party set the
-  environment of a process using syshttp.
+- `verify=False` logs a warning under the `syshttp.client` logger when the
+  transport is made, and changes no process-wide warning filter.
+- A `_PY` hook and `SYSHTTP_DEFAULT_TRANSPORT` name code to import. Never let
+  an untrusted party set the environment of a process using syshttp.
+- A client keeps the cookies its responses set for its whole life, as a
+  session does: build one per identity, or pass `cookies=` a jar of its own.

@@ -1,5 +1,5 @@
 site_name: syshttp
-site_description: HTTP plumbing over the standard library, with an optional requests session
+site_description: HTTP plumbing that follows the system, and an HTTP client on the standard library
 site_url: https://jose-pr.github.io/syshttp/
 repo_url: https://github.com/jose-pr/syshttp
 repo_name: jose-pr/syshttp
@@ -32,8 +32,7 @@ nav:
   - API Reference:
       - env: api/env.md
       - proxy: api/proxy.md
-      - session: api/session.md
-      - fetch: api/fetch.md
+      - client: api/client.md
       - jar: api/jar.md
       - cookies: api/cookies.md
       - hooks: api/hooks.md

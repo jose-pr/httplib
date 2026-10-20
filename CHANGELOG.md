@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `syshttp.client`: an HTTP client on the standard library, so that no feature
+  of syshttp needs `requests` (which only `syshttp.autopatch` patches, in a
+  program that imports it). `HTTPClient(transport=None, *, headers, timeout,
+  deadline, user_agent, env, proxymap, ssl_context, proxy_ssl_context, verify,
+  cookies, tokens, auth_provider, retries, backoff, status_forcelist,
+  cookie_hosts)` sends through a transport and follows redirects with one rule
+  for credentials (`Authorization` goes to the origin it was given for and to no
+  other scheme, host or port). The default `HTTPTransport` (on `http.client`,
+  with a per-thread connection pool, framed bodies, `gzip` / `deflate`
+  decoding and a bounded reply size) routes every request and redirect hop by
+  `proxy.proxy_map(env=env)` (or `proxymap=`): the first entry that accepts a
+  connection, an `http` or `https` proxy (`CONNECT`; an `https` proxy over TLS
+  with the origin's TLS inside it), a URL-prefix gateway, a proxy's
+  credential to the proxy alone; and verifies with the caller's `ssl_context`,
+  else the `CA_BUNDLE` bundle or `verify=<path>`, else the system's context
+  (`proxy_ssl_context` for an `https` proxy or gateway). Cookies (RFC 6265,
+  per origin, on every hop, in a jar by host with `cookies=`), tokens, `_PY`
+  hooks, `auth_provider` and retries (`Retry-After` honoured, a status that
+  outlasts them returned) work as they did on the session. `HTTPResponse`
+  reads its body whole as `content`, `text()` and `json()`.
+- `syshttp.fetch()` (defined in `syshttp.client`, re-exported from the root
+  without importing it): `fetch(url, method="GET", *, headers, data, json,
+  timeout, client, transport, reauth, **client_options)` returns the
+  `HTTPResponse` with its body read, whatever the status; a given `client` is
+  left open and a new one is closed; `reauth` runs once after a 401 or 403.
+- The transport protocol is public: `Transport` (`send()` and `close()`),
+  `PreparedRequest` and `prepare_request()` give another transport (on
+  `requests`, `httpx`, or a fake) the checks and body framing of syshttp's own.
+  `SYSHTTP_DEFAULT_TRANSPORT` (`module:attr` or `<file>.py:attr`, read under the
+  prefixes) names the transport of a client given none; a value that cannot be
+  used is `ConfigurationError`. `hooks.load_object()` is the loader it shares
+  with the `_PY` hooks.
 - `syshttp.exceptions`: `SysHTTPError` (the base of what goes wrong at run
   time), `ConfigurationError` (a `ValueError`), `HookError` (a `RuntimeError`)
   and `ResponseError` (a `ValueError`), exported from the root. A malformed
@@ -79,6 +111,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- `syshttp.fetch` is a function, not a module: `fetch()` replaces the helpers
+  below. `_PY` hooks are called as `hook(client, method, url, kwargs)` with the
+  keyword arguments of `HTTPClient.request()`, and may return an
+  `HTTPResponse`; `auth.AuthProvider.ensure(client, url)` takes the client.
+  `CA_BUNDLE` is the bundle a client's `verify=True` uses. `cookies.py` keeps
+  the Netscape rows, `set_cookie_specs`, `cookie_applies` and `host_aliases`
+  only; the client keeps its cookies as those rows.
 - Routing is proxylib 2's (`proxylib>=2.0.2,<3`; 2.0.1 breaks pip's cached
   requests). `proxy.proxy_map(proxy,
   noproxy, proxy_user, *, env)` is the settings as one proxylib proxy map,
@@ -134,6 +173,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Removed
 
+- `syshttp.session` (`new_session()` and its `requests` adapter), the
+  `session` extra (and its `requests` and `urllib3` floors; `requests` stays a
+  development dependency for the tests of `syshttp.autopatch`), and the helpers
+  of the old `syshttp.fetch` module: `request_text`, `request_json`,
+  `request_with_reauth`, `request_text_auto` and `request_json_auto`. Their
+  replacements are `HTTPClient` and `fetch()`. A per-request `verify=` and
+  `cert=` are gone with them: build a client with `verify=` or an
+  `ssl_context` that holds the identity. `cookies.apply_to_session`,
+  `merge_set_cookie_headers` and `host_only_policy`, which only a `requests`
+  session used, are gone too.
 - `proxy.proxy_url`, `configured_proxy_url`, `system_proxy`,
   `system_proxy_map`, `first_reachable`, `PROBE_MAX_AGE`, `PROBE_TIMEOUT`,
   `resolve`, `proxy_authorization`, `configured_authorization`, `userinfo`,
