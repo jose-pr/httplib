@@ -327,7 +327,7 @@ def test_a_path_cookie_is_sent_to_its_path_only_and_longer_paths_come_first(web)
     assert _get(client, "http://bank.test/app/x") == "app=2; all=1"
 
 
-def test_a_secure_cookie_goes_over_https_only_and_an_expired_one_goes_nowhere(web):
+def test_a_secure_cookie_from_plain_http_and_an_expired_one_are_kept_nowhere(web):
     client = _client(web)
     _get(
         client,
@@ -335,9 +335,10 @@ def test_a_secure_cookie_goes_over_https_only_and_an_expired_one_goes_nowhere(we
         "s=1; Secure; Path=/",
         "gone=1; Max-Age=0; Path=/",
         "past=1; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/",
+        "plain=1; Path=/",
     )
-    assert _get(client, "http://bank.test/") == ""
-    assert _jar(client) == [("s", "bank.test", "/", "1")]
+    assert _get(client, "http://bank.test/") == "plain=1"
+    assert _jar(client) == [("plain", "bank.test", "/", "1")]
 
 
 # -- domain_covers -----------------------------

@@ -15,7 +15,15 @@ import time as _time
 import typing as _ty
 import urllib.parse as _urlparse
 
-from ..cookies import CookieSpec, cookie_applies, domain_covers, host_aliases, set_cookie_specs
+from ..cookies import (
+    _SECURE_HOSTS,
+    CookieSpec,
+    _path_matches,
+    cookie_applies,
+    domain_covers,
+    host_aliases,
+    set_cookie_specs,
+)
 from ..env import HTTPEnv
 from ..exceptions import ConfigurationError
 from ..jar import CookieJar, FileCookieJar, FileTokenJar, TokenJar
@@ -179,14 +187,33 @@ class Cookies:
         deletes the ones it expires, and writes the jar when rows changed."""
         parts = _urlparse.urlsplit(url)
         found = set_cookie_specs(values, parts.hostname or "", request_path=parts.path or "/", aliases=self._aliases)
+        secure = parts.scheme == "https" or (parts.hostname or "").lower() in _SECURE_HOSTS
         with self._lock:
             for spec, gone in found:
+                if not secure and (spec.secure or self._shadows_secure(spec)):
+                    continue  # a plain-http response cannot set, replace or delete a Secure cookie
                 key = (spec.domain, spec.path, spec.name)
                 if gone:
                     self._rows.pop(key, None)
                 else:
                     self._rows[key] = spec
             self._write(url)
+
+    def _shadows_secure(self, spec: CookieSpec) -> bool:
+        """Whether a stored Secure cookie has `spec`'s name, a domain that
+        matches its domain or the other way round, and a path `spec`'s path
+        matches (RFC 6265bis 5.7, leave Secure cookies alone)."""
+        return any(
+            row.secure
+            and row.name == spec.name
+            and (
+                row.domain == spec.domain
+                or row.domain.endswith("." + spec.domain)
+                or spec.domain.endswith("." + row.domain)
+            )
+            and _path_matches(row.path, spec.path)
+            for row in self._rows.values()
+        )
 
     def _write(self, url: str) -> None:
         if self._jar is None:
