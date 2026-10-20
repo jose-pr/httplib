@@ -1,6 +1,7 @@
 """SYSHTTP_PROXY_AUTH_HEADER names the header the proxy credential rides in;
-syshttp's typing imports requests only under TYPE_CHECKING."""
+requests is the business of syshttp.autopatch alone."""
 
+import ast
 import subprocess
 import sys
 from pathlib import Path
@@ -54,6 +55,81 @@ def test_syshttp_typing_never_imports_requests_at_runtime():
     )
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout.strip()
     assert out == "False"
+
+
+def test_no_module_but_autopatch_names_requests_or_urllib3_at_runtime():
+    """No import of requests or urllib3, and no import by name, outside
+    syshttp.autopatch (a docstring or a TYPE_CHECKING block may name them)."""
+    found = []
+    for path in sorted((SRC / "syshttp").rglob("*.py")):
+        if path.name == "autopatch.py":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        guarded = {
+            id(child)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.If) and "TYPE_CHECKING" in ast.dump(node.test)
+            for child in ast.walk(node)
+        }
+        for node in ast.walk(tree):
+            if id(node) in guarded:
+                continue
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names = [node.module or ""]
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                names = [node.value] if node.value.split(".")[0] in ("requests", "urllib3") else []
+            else:
+                continue
+            if any(name.split(".")[0] in ("requests", "urllib3") for name in names):
+                found.append("%s:%d" % (path.relative_to(SRC), node.lineno))
+    assert found == []
+
+
+_WITHOUT_REQUESTS = """
+import sys, threading
+sys.path.insert(0, %r)
+sys.modules["requests"] = None
+sys.modules["urllib3"] = None
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        body = b'{"ok": true}'
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+threading.Thread(target=server.serve_forever, daemon=True).start()
+
+import syshttp.client, syshttp.hooks, syshttp.cookies, syshttp.auth, syshttp.jar, syshttp.proxy, syshttp.tls
+from syshttp import fetch
+
+response = fetch("http://127.0.0.1:%%d/" %% server.server_port, retries=0, cookies=False)
+print(response.status, response.json())
+server.shutdown()
+server.server_close()
+"""
+
+
+def test_fetch_works_with_requests_and_urllib3_absent():
+    """The done-when of dropping the session: the client and fetch() run with
+    neither package importable."""
+    out = subprocess.run(
+        [sys.executable, "-c", _WITHOUT_REQUESTS % str(SRC)], capture_output=True, text=True, timeout=120
+    )
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == "200 {'ok': True}"
 
 
 def test_syshttp_type_checks_clean():

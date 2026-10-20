@@ -1,46 +1,38 @@
-"""Netscape cookie-file I/O, curl's cookie rules, and requests-session
-cookie merging. The requests-free half (``CookieSpec``, ``load_netscape``,
-``save_netscape``, ``cookie_applies``, ``set_cookie_specs``) is what the curl
-fallback's ``-b`` / ``-c`` run on."""
+"""Netscape cookie-file I/O and curl's cookie rules: ``CookieSpec``,
+``load_netscape``, ``save_netscape``, ``cookie_applies``, ``set_cookie_specs``
+and the host groups of ``host_aliases``. The client keeps its cookies as these
+rows; a curl front end's ``-b`` / ``-c`` run on them too."""
 
 from __future__ import annotations
 
-import http.cookiejar
 import ipaddress
 import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, Protocol, Tuple, cast
-from urllib.parse import urlparse, urlsplit, urlunsplit
+from typing import Dict, Iterable, List, Mapping, Optional, Protocol, Tuple
+from urllib.parse import urlparse
 
 from ._fileio import read_text, write_private
 from ._parse import ascii_int, http_date
-
-if TYPE_CHECKING:  # requests is optional at runtime: types only
-    import requests
-
 
 __all__ = (
     "CookieLike",
     "CookieSpec",
     "HTTP_ONLY_PREFIX",
     "MAX_COOKIE_AGE",
-    "apply_to_session",
     "cookie_applies",
     "domain_covers",
     "host_aliases",
-    "host_only_policy",
     "load_netscape",
-    "merge_set_cookie_headers",
     "save_netscape",
     "set_cookie_specs",
 )
 
 
 class CookieLike(Protocol):
-    """What :func:`save_netscape` reads off a cookie: ``http.cookiejar.Cookie``
-    (a requests session's) or any object with these attributes."""
+    """What :func:`save_netscape` reads off a cookie: a ``CookieSpec``, an
+    ``http.cookiejar.Cookie`` or any object with these attributes."""
 
     @property
     def domain(self) -> str: ...
@@ -345,180 +337,6 @@ def set_cookie_specs(
     return out
 
 
-def _local_name(host: str) -> str:
-    """The name ``http.cookiejar`` keys a host-only cookie by: a host with no
-    dot (``localhost``, ``wiki``, an IPv6 literal) gets ``.local`` appended."""
-    return host if "." in host else host + ".local"
-
-
-def _session_cookie(row: CookieSpec) -> "http.cookiejar.Cookie":
-    bare = row.domain.lstrip(".").lower()
-    if not bare:
-        raise ValueError("a cookie row without a domain")
-    # An IP address matches only itself, whatever the flag says.
-    domain_cookie = (row.subdomains or row.domain.startswith(".")) and not _is_ip(bare)
-    return http.cookiejar.Cookie(
-        version=0,
-        name=row.name,
-        value=row.value,
-        port=None,
-        port_specified=False,
-        domain="." + bare if domain_cookie else _local_name(bare),
-        domain_specified=domain_cookie,
-        domain_initial_dot=domain_cookie,
-        path=row.path or "/",
-        path_specified=True,
-        secure=bool(row.secure),
-        expires=row.expires or None,
-        discard=not row.expires,
-        comment=None,
-        comment_url=None,
-        rest={"HttpOnly": None} if row.http_only else {},  # type: ignore[dict-item]
-        rfc2109=False,
-    )
-
-
-def apply_to_session(session: "requests.Session", cookies: Iterable[CookieSpec]) -> None:
-    """Load jar rows into the session with their flags: a ``Secure`` row
-    stays secure (never sent over http), an expiry stays an expiry, and a row
-    that is not a domain cookie (no leading dot, include-subdomains flag
-    ``FALSE``) is sent to its host only, ``localhost`` and other single-label
-    hosts included. ``new_session`` gives its session
-    :func:`host_only_policy`, which the last needs."""
-    for row in cookies:
-        try:
-            session.cookies.set_cookie(_session_cookie(row))
-        except Exception:
-            continue
-
-
-def _spec_from_cookie(cookie: "http.cookiejar.Cookie", host: str) -> CookieSpec:
-    """The jar row for a session cookie: the include-subdomains flag from
-    how the cookie was set, ``HttpOnly`` from its attributes, and a
-    ``.local`` suffix that ``http.cookiejar`` added to ``host`` (a
-    single-label name) taken off again."""
-    domain = (getattr(cookie, "domain", "") or "").lower()
-    specified = bool(getattr(cookie, "domain_specified", False)) or domain.startswith(".")
-    bare = domain.lstrip(".")
-    if not specified and "." not in host.lower() and bare == host.lower() + ".local":
-        bare = host.lower()
-    rest = getattr(cookie, "_rest", None) or {}
-    return CookieSpec(
-        domain=bare,
-        path=getattr(cookie, "path", "/") or "/",
-        secure=bool(getattr(cookie, "secure", False)),
-        expires=getattr(cookie, "expires", None),
-        name=getattr(cookie, "name", ""),
-        value=getattr(cookie, "value", ""),
-        http_only=any(str(key).lower() == "httponly" for key in rest),
-        subdomains=specified,
-    )
-
-
-def _with_host(url: str, host: str) -> str:
-    parts = urlsplit(url)
-    netloc = "[%s]" % host if ":" in host else host
-    try:
-        port = parts.port
-    except ValueError:
-        port = None
-    if port is not None:
-        netloc += ":%d" % port
-    return urlunsplit(parts._replace(netloc=netloc))
-
-
-def _request_host(request) -> str:
-    """The host ``http.cookiejar`` judges a request by: the URL's, else the
-    ``Host`` header's, without a port, lower case."""
-    host = urlsplit(request.get_full_url()).netloc or request.get_header("Host", "")
-    return re.sub(r":\d+$", "", host, count=1).lower()
-
-
-class _AliasedRequest:
-    """A request as ``http.cookiejar`` reads it (requests' ``MockRequest``),
-    with its host replaced by ``host``."""
-
-    def __init__(self, request, host: str) -> None:
-        self._request = request
-        self.alias_host = host
-        self._url = _with_host(request.get_full_url(), host)
-
-    def __getattr__(self, name: str):
-        return getattr(self._request, name)
-
-    def get_full_url(self) -> str:
-        return self._url
-
-    def get_host(self) -> str:
-        return urlsplit(self._url).netloc
-
-    def get_origin_req_host(self) -> str:
-        return self.get_host()
-
-    host = property(get_host)
-    origin_req_host = property(get_origin_req_host)
-
-
-class _AliasPolicy(http.cookiejar.DefaultCookiePolicy):
-    """``http.cookiejar``'s policy with each alias group one host: a member's
-    host-only cookie, or one whose Domain names a member, is stored against
-    the group's first host, and a request to a member carries what a request
-    to any member would."""
-
-    def __init__(self, aliases: Mapping[str, str], **kwargs) -> None:
-        super().__init__(**kwargs)
-        self._aliases = dict(aliases)
-        self._groups: Dict[str, List[str]] = {}
-        for host, first in self._aliases.items():
-            self._groups.setdefault(first, []).append(host)
-
-    def _as_members(self, request) -> List[_AliasedRequest]:
-        host = _normal_host(_request_host(request))
-        first = self._aliases.get(host)
-        return [_AliasedRequest(request, h) for h in self._groups.get(first, []) if h != host] if first else []
-
-    def _as_first(self, request) -> Optional[_AliasedRequest]:
-        target = self._aliases.get(_normal_host(_request_host(request)))
-        return None if target is None else _AliasedRequest(request, target)
-
-    def set_ok(self, cookie, request) -> bool:
-        first: Any = self._as_first(request)
-        if first is None:
-            return super().set_ok(cookie, request)
-        if cookie.domain_specified:
-            # make_cookies has put a dot in front of a Domain attribute.
-            if self._aliases.get(_normal_host(cookie.domain.lstrip("."))) != first.alias_host:
-                return super().set_ok(cookie, request)
-            domain, subdomains = _cookie_domain(first.alias_host, first.alias_host) or (first.alias_host, False)
-        else:
-            domain, subdomains = first.alias_host, False
-        # The cookie was made a moment ago for this response alone.
-        cookie.domain = "." + domain if subdomains else _local_name(_request_host(first))
-        cookie.domain_specified = cookie.domain_initial_dot = subdomains
-        return super().set_ok(cookie, first)
-
-    def return_ok(self, cookie, request) -> bool:
-        return super().return_ok(cookie, request) or any(
-            super(_AliasPolicy, self).return_ok(cookie, cast(Any, other)) for other in self._as_members(request)
-        )
-
-    def domain_return_ok(self, domain, request) -> bool:
-        return super().domain_return_ok(domain, request) or any(
-            super(_AliasPolicy, self).domain_return_ok(domain, cast(Any, other)) for other in self._as_members(request)
-        )
-
-
-def host_only_policy(aliases: Optional[Mapping[str, str]] = None) -> "http.cookiejar.DefaultCookiePolicy":
-    """A cookie policy that keeps a cookie set without ``Domain`` on its own
-    host, as RFC 6265 and curl do (``http.cookiejar``'s default also sends it
-    to subdomains). ``aliases`` (:func:`host_aliases`) makes each group of
-    hosts one, as :func:`set_cookie_specs` does."""
-    strict = http.cookiejar.DefaultCookiePolicy.DomainStrictNonDomain
-    if aliases:
-        return _AliasPolicy(aliases, strict_ns_domain=strict)
-    return http.cookiejar.DefaultCookiePolicy(strict_ns_domain=strict)
-
-
 def domain_covers(domain: str, host: str) -> bool:
     """Does a cookie ``domain`` apply to ``host``: the host itself, or a
     subdomain when the domain has a leading dot (the Netscape flag)."""
@@ -547,42 +365,3 @@ def save_netscape(session_cookies: "Iterable[CookieLike]", path: Path) -> None:
             continue
         lines.append("%s\t%s\t%s\t%s\t%s\t%s\t%s\n" % (domain, flag, cpath, secure, expires, name, value))
     write_private(path, "".join(lines).encode("utf-8"))
-
-
-def _forget(session: "requests.Session", cookie: CookieSpec) -> None:
-    """Remove the session's cookie of the same name, path and domain,
-    whether it was stored host-only or as a domain cookie (and, for a
-    single-label host, under its ``.local`` effective host)."""
-    domains = [cookie.domain, "." + cookie.domain]
-    if "." not in cookie.domain:
-        domains.append(cookie.domain + ".local")
-    for domain in domains:
-        try:
-            session.cookies.clear(domain=domain, path=cookie.path, name=cookie.name)
-        except KeyError:
-            continue
-
-
-def merge_set_cookie_headers(
-    session: "requests.Session", response: "requests.Response", *, aliases: Optional[Mapping[str, str]] = None
-) -> None:
-    """Apply the deletions that ``Set-Cookie`` headers of ``response`` (and of
-    the redirect hops before it) ask for and requests' own extraction misses:
-    one that names its ``Domain`` differently from how the cookie was stored,
-    one sent by another host of an alias group (``aliases``), and an empty
-    value. Cookies that are set are left to requests, which has
-    already stored each once against the URL the caller asked for. A header
-    for a domain the response's host does not own is ignored, as on a set."""
-    for hop in [*getattr(response, "history", ()), response]:
-        raw_headers = getattr(getattr(hop, "raw", None), "headers", None)
-        if raw_headers is None:
-            continue
-        try:
-            set_cookies = raw_headers.get_all("Set-Cookie") or []
-        except Exception:
-            continue
-        parts = urlparse(getattr(hop, "url", "") or "")
-        specs = set_cookie_specs(set_cookies, parts.hostname or "", request_path=parts.path, aliases=aliases)
-        for cookie, gone in specs:
-            if gone:
-                _forget(session, cookie)
