@@ -27,13 +27,26 @@ def entries(proxymap: _ty.Any, url: str) -> "tuple[Entry, ...]":
         answer = proxylib.lookup(proxymap, url)
     except KeyError:
         return (None,)
-    usable = tuple(entry for entry in answer if entry is None or entry.scheme in DEFAULT_PORTS)
+    usable: "list[Entry]" = []
+    refused: "list[tuple[proxylib.Proxy, str]]" = []
+    for entry in answer:
+        why = None if entry is None else _refusal(entry, url)
+        if why is None:
+            usable.append(entry)
+        else:
+            refused.append((_ty.cast("proxylib.Proxy", entry), why))
     if usable:
-        return usable
-    raise proxylib.UnsupportedProxyError(
-        "syshttp.client",
-        [(entry, "only http and https proxies and URL-prefix gateways are spoken") for entry in answer],
-    )
+        return tuple(usable)
+    raise proxylib.UnsupportedProxyError("syshttp.client", refused)
+
+
+def _refusal(entry: "proxylib.Proxy", url: str) -> "str | None":
+    """Why the transport does not send `url` through `entry`, or `None`."""
+    if entry.scheme not in DEFAULT_PORTS:
+        return "only http and https proxies and URL-prefix gateways are spoken"
+    if entry.scheme == "prefix+http" and url[:6].lower() == "https:":
+        return "an https origin's request would cross a plain-http gateway in clear text"
+    return None
 
 
 def reachable(candidates: "tuple[Entry, ...]", url: str, connect_timeout: "float | None") -> Entry:

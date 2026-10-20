@@ -370,11 +370,40 @@ def test_a_gateway_carries_the_headers_of_the_request_and_its_own(transport_for)
     assert request.header("Cookie") == "a=1" and request.header("X-Gate") == "g"
 
 
-def test_an_https_origin_is_asked_of_a_plain_gateway_without_a_tunnel(transport_for):
+def test_an_https_origin_is_not_sent_through_a_plain_http_gateway(transport_for):
+    """Its tokens and Secure cookies would cross the gateway in clear text."""
     with Proxy() as proxy:
-        get(transport_for(Provider(gateway(proxy))), "https://backend.test/f").read()
-    (request,) = proxy.requests
+        with pytest.raises(proxylib.UnsupportedProxyError) as excinfo:
+            get(transport_for(Provider(gateway(proxy))), "https://backend.test/f")
+    assert "clear text" in str(excinfo.value) and "PROXYSECRET" not in str(excinfo.value)
+    assert proxy.requests == []
+
+
+def test_a_plain_http_gateway_is_skipped_for_an_https_origin_when_another_entry_can_serve_it(transport_for):
+    authority = loopback_authority()
+    with Wire(lambda r: response(body=b"secure"), tls=authority.server_context()) as origin:
+        with Proxy() as proxy:
+            entries = [gateway(proxy), None]
+            transport = transport_for(Provider(entries), ssl_context=authority.client_context())
+            assert get(transport, f"https://localhost:{origin.port}/x").read() == b"secure"
+    assert proxy.requests == [] and len(origin.requests) == 1
+
+
+def test_an_http_origin_is_still_asked_of_a_plain_http_gateway(transport_for):
+    with Proxy() as proxy:
+        get(transport_for(Provider(gateway(proxy))), "http://backend.test/f").read()
+    assert proxy.requests[0].target == "/fetch/http://backend.test/f"
+
+
+def test_an_https_origin_is_asked_of_an_https_gateway_over_tls_without_a_tunnel(transport_for):
+    authority = loopback_authority()
+    with Wire(lambda r: response(body=b"gateway"), tls=authority.server_context()) as gate:
+        entry = proxylib.Proxy("prefix+https", "localhost", gate.port, "carol", "PROXYSECRET", path="/fetch/")
+        transport = transport_for(Provider(entry), proxy_ssl_context=authority.client_context())
+        assert get(transport, "https://backend.test/f").read() == b"gateway"
+    (request,) = gate.requests
     assert (request.method, request.target) == ("GET", "/fetch/https://backend.test/f")
+    assert request.header("Proxy-Authorization") == basic("carol", "PROXYSECRET")
 
 
 def test_a_configured_gateway_routes_through_the_settings(transport_for):
