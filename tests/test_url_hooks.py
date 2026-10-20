@@ -1,5 +1,5 @@
 """URL hooks: SYSHTTP_HOOKS_<KEY> patterns matched on the caller's URL run a
-Python callable with the session -- under a prefix gateway too, where the
+Python callable with the client -- under a prefix gateway too, where the
 wire URL is the gateway's and must not be what is matched. The ``_CURL``
 target is parsed here and run by a curl front end.
 """
@@ -18,29 +18,25 @@ from test_proxy_auth import _clean_env  # noqa: F401  (autouse fixture reused)
 CALLS = []
 
 
-def record(session, method, url, kwargs):
+def record(client, method, url, kwargs):
     CALLS.append((method, url))
     headers = kwargs.setdefault("headers", {})
     headers["X-Hooked"] = "record"
     return None
 
 
-def answer(session, method, url, kwargs):
-    import requests
+def answer(client, method, url, kwargs):
+    from syshttp.client import HTTPResponse
 
-    resp = requests.Response()
-    resp.status_code = 299
-    resp._content = b"from-hook"
-    resp.url = url
-    return resp
+    return HTTPResponse(299, "", {}, url, b"from-hook")
 
 
-def reentrant(session, method, url, kwargs):
-    """A hook that itself uses the session (a login call): no hook must fire
+def reentrant(client, method, url, kwargs):
+    """A hook that itself uses the client (a login call): no hook must fire
     for that inner request."""
     CALLS.append(("inner-start", url))
-    inner = session.get(url + "?login=1", timeout=5)
-    CALLS.append(("inner-done", inner.status_code))
+    inner = client.request("GET", url + "?login=1", timeout=5)
+    CALLS.append(("inner-done", inner.status))
     kwargs.setdefault("headers", {})["X-Hooked"] = "reentrant"
     return None
 
@@ -90,7 +86,7 @@ def test_load_callable_module_and_file(tmp_path):
     assert hooks.load_callable("test_url_hooks:record") is record
     assert hooks.load_callable("os.path:join") is os.path.join
     f = tmp_path / "my hook.py"
-    f.write_text("def go(session, method, url, kwargs):\n    return 'file-hook'\n", encoding="utf-8")
+    f.write_text("def go(client, method, url, kwargs):\n    return 'file-hook'\n", encoding="utf-8")
     assert hooks.load_callable(str(f) + ":go")(None, "GET", "u", {}) == "file-hook"
     with pytest.raises(ValueError):
         hooks.load_callable("nocolon")
@@ -126,43 +122,47 @@ def test_curl_command_is_a_shell_quoted_command_line(tmp_path):
 # --------------------------------------------------------------------------
 
 
-def _session():
-    pytest.importorskip("requests")
-    from syshttp.session import new_session
+def _client():
+    from syshttp.client import HTTPClient
 
-    return new_session(retries=0)
+    return HTTPClient(retries=0)
+
+
+def _get(url):
+    with _client() as client:
+        return client.request("GET", url, timeout=5)
 
 
 def test_py_hook_runs_on_the_origin_url_under_a_prefix_gateway(origin, gateway, monkeypatch):
     monkeypatch.setenv("SYSHTTP_HOOKS_T", "^" + origin.replace(".", r"\."))
     monkeypatch.setenv("SYSHTTP_HOOKS_T_PY", "test_url_hooks:record")
-    resp = _session().get(origin + "/x", timeout=5)
-    assert resp.text == "gateway"
+    resp = _get(origin + "/x")
+    assert resp.text() == "gateway"
     assert CALLS == [("GET", origin + "/x")], "the caller's URL, not /fetch/<url> on the gateway"
     assert _Gateway.seen[-1][1].get("X-Hooked") == "record", "headers the hook set went out"
     # A URL the pattern does not cover: untouched.
     CALLS.clear()
     monkeypatch.setenv("SYSHTTP_HOOKS_T", "^https://nowhere[.]example/")
-    _session().get(origin + "/z", timeout=5)
+    _get(origin + "/z")
     assert CALLS == [] and "X-Hooked" not in _Gateway.seen[-1][1]
 
 
 def test_py_hook_can_answer_instead(origin, gateway, monkeypatch):
     monkeypatch.setenv("SYSHTTP_HOOKS_T", "/answered$")
     monkeypatch.setenv("SYSHTTP_HOOKS_T_PY", "test_url_hooks:answer")
-    session = _session()
+    client = _client()
     before = len(_Gateway.seen)
-    resp = session.get(origin + "/answered", timeout=5)
-    assert resp.status_code == 299 and resp.text == "from-hook"
+    resp = client.request("GET", origin + "/answered", timeout=5)
+    assert resp.status == 299 and resp.text() == "from-hook"
     assert len(_Gateway.seen) == before, "nothing went on the wire"
-    assert session.get(origin + "/real", timeout=5).text == "gateway"
+    assert client.request("GET", origin + "/real", timeout=5).text() == "gateway"
 
 
 def test_py_hook_requests_do_not_re_trigger_hooks(origin, gateway, monkeypatch):
     monkeypatch.setenv("SYSHTTP_HOOKS_T", ".")
     monkeypatch.setenv("SYSHTTP_HOOKS_T_PY", "test_url_hooks:reentrant")
-    resp = _session().get(origin + "/x", timeout=5)
-    assert resp.text == "gateway"
+    resp = _get(origin + "/x")
+    assert resp.text() == "gateway"
     assert CALLS == [("inner-start", origin + "/x"), ("inner-done", 200)]
     assert _Gateway.seen[-1][1].get("X-Hooked") == "reentrant"
     assert "X-Hooked" not in _Gateway.seen[-2][1], "the login call carried no hook header"
@@ -175,8 +175,8 @@ def test_py_hooks_run_in_key_order_first_answer_wins(origin, gateway, monkeypatc
     monkeypatch.setenv("SYSHTTP_HOOKS_B_PY", "test_url_hooks:answer")
     monkeypatch.setenv("SYSHTTP_HOOKS_C", ".")
     monkeypatch.setenv("SYSHTTP_HOOKS_C_PY", "test_url_hooks:reentrant")
-    resp = _session().get(origin + "/x", timeout=5)
-    assert resp.text == "from-hook" and CALLS == [("GET", origin + "/x")]
+    resp = _get(origin + "/x")
+    assert resp.text() == "from-hook" and CALLS == [("GET", origin + "/x")]
 
 
 def test_a_blank_hook_target_is_ignored():
@@ -209,7 +209,7 @@ def test_a_file_hook_runs_its_module_body_once(tmp_path):
         "with open(%r, 'a') as handle:\n"
         "    handle.write('x')\n"
         "STATE = []\n"
-        "def go(session, method, url, kwargs):\n"
+        "def go(client, method, url, kwargs):\n"
         "    STATE.append(url)\n"
         "    return len(STATE)\n" % str(hits),
         encoding="utf-8",
@@ -224,7 +224,7 @@ def test_two_hook_files_with_one_stem_are_two_modules(tmp_path):
     first, second = tmp_path / "a" / "hook.py", tmp_path / "b" / "hook.py"
     for path, name in ((first, "first"), (second, "second")):
         path.parent.mkdir()
-        path.write_text("def go(session, method, url, kwargs):\n    return %r\n" % name, encoding="utf-8")
+        path.write_text("def go(client, method, url, kwargs):\n    return %r\n" % name, encoding="utf-8")
     assert hooks.load_callable(str(first) + ":go")(None, "GET", "u", {}) == "first"
     assert hooks.load_callable(str(second) + ":go")(None, "GET", "u", {}) == "second"
     assert hooks.load_callable(str(first) + ":go")(None, "GET", "u", {}) == "first"

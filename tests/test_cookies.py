@@ -171,7 +171,7 @@ def test_save_netscape_accepts_specs_directly(tmp_path):
     assert load_netscape(path) == [CookieSpec("h", "/", False, None, "a", "1")]
 
 
-# -- the session ------------------------------------------------------------
+# -- the client -------------------------------------------------------------
 
 
 class _Origin(BaseHTTPRequestHandler):
@@ -206,113 +206,141 @@ def web():
         server.server_close()
 
 
-def _get(session, url, *set_cookies):
+def _client(env, **options):
+    from syshttp.client import HTTPClient
+
+    return HTTPClient(env=env, retries=0, **options)
+
+
+def _get(client, url, *set_cookies):
     query = "".join("&c=" + quote(c) for c in set_cookies)
-    return session.get(url + ("?" + query[1:] if query else ""), timeout=10).text
+    return client.request("GET", url + ("?" + query[1:] if query else ""), timeout=10).text()
 
 
-def _jar(session):
-    return sorted((c.name, c.domain, c.path, c.value) for c in session.cookies)
+def _jar(client):
+    """The client's cookies as (name, domain, path, value): a domain cookie's
+    domain with its leading dot."""
+    rows = client._cookies._rows.values()
+    return sorted((c.name, ("." if c.subdomains else "") + c.domain, c.path, c.value) for c in rows)
 
 
-def test_a_foreign_host_cannot_set_or_delete_a_cookie_in_the_session_or_the_file(web, tmp_path):
-    from syshttp.session import new_session
-
-    session = new_session(cookies=FileCookieJar(tmp_path), retries=0, env=web)
-    _get(session, "http://bank.test/", "real=bank-session; Path=/")
-    _get(session, "http://evil.test/", "sid=attacker; Domain=bank.test; Path=/")
-    _get(session, "http://evil.test/", "real=; Max-Age=0; Domain=bank.test; Path=/")
-    _get(session, "http://evil.test/", "tld=1; Domain=test")
-    assert _get(session, "http://bank.test/") == "real=bank-session"
-    assert _jar(session) == [("real", "bank.test", "/", "bank-session")]
+def test_a_foreign_host_cannot_set_or_delete_a_cookie_in_the_client_or_the_file(web, tmp_path):
+    client = _client(web, cookies=FileCookieJar(tmp_path))
+    _get(client, "http://bank.test/", "real=bank-session; Path=/")
+    _get(client, "http://evil.test/", "sid=attacker; Domain=bank.test; Path=/")
+    _get(client, "http://evil.test/", "real=; Max-Age=0; Domain=bank.test; Path=/")
+    _get(client, "http://evil.test/", "tld=1; Domain=test")
+    assert _get(client, "http://bank.test/") == "real=bank-session"
+    assert _jar(client) == [("real", "bank.test", "/", "bank-session")]
     saved = (tmp_path / "cookies" / "bank.test.txt").read_text(encoding="utf-8")
     assert "real" in saved and "attacker" not in saved
 
 
 def test_one_copy_per_cookie_with_the_default_path(web):
-    from syshttp.session import new_session
-
-    session = new_session(retries=0, env=web)
-    _get(session, "http://bank.test/app/login", "dir=1")
-    assert _jar(session) == [("dir", "bank.test", "/app", "1")]
-    _get(session, "http://www.example.test/", "sso=1; Domain=example.test; Path=/")
-    assert _jar(session)[-1][:2] == ("sso", ".example.test")
-    assert len(_jar(session)) == 2
-    assert _get(session, "http://api.example.test/") == "sso=1"
+    client = _client(web)
+    _get(client, "http://bank.test/app/login", "dir=1")
+    assert _jar(client) == [("dir", "bank.test", "/app", "1")]
+    _get(client, "http://www.example.test/", "sso=1; Domain=example.test; Path=/")
+    assert _jar(client)[-1][:2] == ("sso", ".example.test")
+    assert len(_jar(client)) == 2
+    assert _get(client, "http://api.example.test/") == "sso=1"
 
 
 def test_a_deletion_that_names_the_domain_differently_is_applied(web):
     from syshttp.jar import MemoryCookieJar
-    from syshttp.session import new_session
 
-    jar = MemoryCookieJar()
-    session = new_session(cookies=jar, retries=0, env=web)
-    _get(session, "http://bank.test/", "k=1; Path=/")
-    assert _jar(session) == [("k", "bank.test", "/", "1")]
-    _get(session, "http://bank.test/", "k=; Max-Age=0; Domain=bank.test; Path=/")
-    assert _jar(session) == []
-    _get(session, "http://bank.test/", "e=1; Path=/")
-    _get(session, "http://bank.test/", "e=; Path=/")
-    assert _jar(session) == []
+    client = _client(web, cookies=MemoryCookieJar())
+    _get(client, "http://bank.test/", "k=1; Path=/")
+    assert _jar(client) == [("k", "bank.test", "/", "1")]
+    _get(client, "http://bank.test/", "k=; Max-Age=0; Domain=bank.test; Path=/")
+    assert _jar(client) == []
+    _get(client, "http://bank.test/", "e=1; Path=/")
+    _get(client, "http://bank.test/", "e=; Path=/")
+    assert _jar(client) == []
 
 
 def test_a_host_only_cookie_does_not_reach_a_subdomain(web):
-    from syshttp.session import new_session
-
-    session = new_session(retries=0, env=web)
-    _get(session, "http://example.test/", "own=1; Path=/")
-    _get(session, "http://example.test/", "wide=1; Domain=example.test; Path=/")
-    assert sorted(_get(session, "http://example.test/").split("; ")) == ["own=1", "wide=1"]
-    assert _get(session, "http://sub.example.test/") == "wide=1"
+    client = _client(web)
+    _get(client, "http://example.test/", "own=1; Path=/")
+    _get(client, "http://example.test/", "wide=1; Domain=example.test; Path=/")
+    assert sorted(_get(client, "http://example.test/").split("; ")) == ["own=1", "wide=1"]
+    assert _get(client, "http://sub.example.test/") == "wide=1"
 
 
 def test_a_single_label_host_survives_a_reload(web, tmp_path):
-    from syshttp.session import new_session
-
-    first = new_session(cookies=FileCookieJar(tmp_path), retries=0, env=web)
+    first = _client(web, cookies=FileCookieJar(tmp_path))
     _get(first, "http://localhost/", "k=v; Path=/")
     _get(first, "http://wiki/", "w=1; Path=/")
     assert (tmp_path / "cookies" / "localhost.txt").read_text(encoding="utf-8").splitlines()[1] == (
         "localhost\tFALSE\t/\tFALSE\t0\tk\tv"
     )
-    second = new_session(cookies=FileCookieJar(tmp_path), retries=0, env=web)
+    second = _client(web, cookies=FileCookieJar(tmp_path))
     assert _get(second, "http://localhost/") == "k=v"
     assert _get(second, "http://wiki/") == "w=1"
 
 
 def test_httponly_reaches_the_file(web, tmp_path):
-    from syshttp.session import new_session
-
-    session = new_session(cookies=FileCookieJar(tmp_path), retries=0, env=web)
-    _get(session, "http://bank.test/", "sid=abc; HttpOnly; Path=/")
-    _get(session, "http://bank.test/", "wide=1; Domain=bank.test; Path=/")
+    client = _client(web, cookies=FileCookieJar(tmp_path))
+    _get(client, "http://bank.test/", "sid=abc; HttpOnly; Path=/")
+    _get(client, "http://bank.test/", "wide=1; Domain=bank.test; Path=/")
     rows = (tmp_path / "cookies" / "bank.test.txt").read_text(encoding="utf-8").splitlines()[1:]
     assert "#HttpOnly_bank.test\tFALSE\t/\tFALSE\t0\tsid\tabc" in rows
     assert "bank.test\tTRUE\t/\tFALSE\t0\twide\t1" in rows
 
 
 def test_a_parent_domain_cookie_reaches_the_hosts_file(web, tmp_path):
-    from syshttp.session import new_session
-
-    session = new_session(cookies=FileCookieJar(tmp_path), retries=0, env=web)
-    _get(session, "http://www.example.test/", "sso=1; Domain=example.test; Path=/")
+    client = _client(web, cookies=FileCookieJar(tmp_path))
+    _get(client, "http://www.example.test/", "sso=1; Domain=example.test; Path=/")
     rows = (tmp_path / "cookies" / "www.example.test.txt").read_text(encoding="utf-8").splitlines()[1:]
     assert rows == ["example.test\tTRUE\t/\tFALSE\t0\tsso\t1"]
-    again = new_session(cookies=FileCookieJar(tmp_path), retries=0, env=web)
+    again = _client(web, cookies=FileCookieJar(tmp_path))
     assert _get(again, "http://www.example.test/") == "sso=1"
 
 
 def test_a_loaded_host_only_row_stays_on_its_host(web):
-    from syshttp.cookies import apply_to_session
-    from syshttp.session import new_session
+    from syshttp.jar import MemoryCookieJar
 
-    session = new_session(retries=0, env=web)
-    apply_to_session(session, [CookieSpec("example.test", "/", False, None, "hostonly", "1")])
-    assert _get(session, "http://example.test/") == "hostonly=1"
-    assert _get(session, "http://sub.example.test/") == ""
+    jar = MemoryCookieJar({"example.test": [CookieSpec("example.test", "/", False, None, "hostonly", "1")]})
+    client = _client(web, cookies=jar)
+    assert _get(client, "http://example.test/") == "hostonly=1"
+    assert _get(client, "http://sub.example.test/") == ""
 
 
-# -- domain_covers and merge_set_cookie_headers -----------------------------
+def test_a_loaded_domain_row_reaches_subdomains_and_a_dotted_one_is_the_same(web):
+    from syshttp.jar import MemoryCookieJar
+
+    rows = [
+        CookieSpec(".example.test", "/", False, None, "dot", "1"),
+        CookieSpec("example.test", "/", False, None, "flag", "2", subdomains=True),
+    ]
+    client = _client(web, cookies=MemoryCookieJar({"example.test": rows, "sub.example.test": []}))
+    assert sorted(_get(client, "http://example.test/").split("; ")) == ["dot=1", "flag=2"]
+    assert _jar(client) == [("dot", ".example.test", "/", "1"), ("flag", ".example.test", "/", "2")]
+    assert sorted(_get(client, "http://sub.example.test/").split("; ")) == ["dot=1", "flag=2"]
+
+
+def test_a_path_cookie_is_sent_to_its_path_only_and_longer_paths_come_first(web):
+    client = _client(web)
+    _get(client, "http://bank.test/", "all=1; Path=/")
+    _get(client, "http://bank.test/", "app=2; Path=/app")
+    assert _get(client, "http://bank.test/other") == "all=1"
+    assert _get(client, "http://bank.test/app/x") == "app=2; all=1"
+
+
+def test_a_secure_cookie_goes_over_https_only_and_an_expired_one_goes_nowhere(web):
+    client = _client(web)
+    _get(
+        client,
+        "http://bank.test/",
+        "s=1; Secure; Path=/",
+        "gone=1; Max-Age=0; Path=/",
+        "past=1; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/",
+    )
+    assert _get(client, "http://bank.test/") == ""
+    assert _jar(client) == [("s", "bank.test", "/", "1")]
+
+
+# -- domain_covers -----------------------------
 
 
 @pytest.mark.parametrize(
@@ -332,57 +360,3 @@ def test_domain_covers(domain, host, covers):
     from syshttp.cookies import domain_covers
 
     assert domain_covers(domain, host) is covers
-
-
-class _Raw:
-    def __init__(self, *set_cookies):
-        self.headers = type("Headers", (), {"get_all": lambda self, name: list(set_cookies)})()
-
-
-class _Response:
-    def __init__(self, url, *set_cookies, history=()):
-        self.url, self.raw, self.history = url, _Raw(*set_cookies), list(history)
-
-
-def _session_with(*cookies):
-    import requests
-
-    session = requests.Session()
-    for name, domain in cookies:
-        session.cookies.set(name, "v", domain=domain, path="/")
-    return session
-
-
-def test_merge_deletes_a_cookie_the_server_expires_and_sets_nothing():
-    from syshttp.cookies import merge_set_cookie_headers
-
-    session = _session_with(("k", "bank.test"), ("keep", "bank.test"))
-    merge_set_cookie_headers(
-        session, _Response("http://bank.test/", "k=; Max-Age=0; Domain=bank.test; Path=/", "new=1")
-    )
-    assert sorted(c.name for c in session.cookies) == ["keep"]
-
-
-def test_merge_ignores_a_deletion_for_a_domain_the_host_does_not_own():
-    from syshttp.cookies import merge_set_cookie_headers
-
-    session = _session_with(("k", "bank.test"))
-    merge_set_cookie_headers(session, _Response("http://evil.test/", "k=; Max-Age=0; Domain=bank.test; Path=/"))
-    assert [c.name for c in session.cookies] == ["k"]
-
-
-def test_merge_reads_the_redirect_hops_too():
-    from syshttp.cookies import merge_set_cookie_headers
-
-    session = _session_with(("k", "bank.test"))
-    hop = _Response("http://bank.test/login", "k=; Max-Age=0; Path=/")
-    merge_set_cookie_headers(session, _Response("http://bank.test/home", history=[hop]))
-    assert list(session.cookies) == []
-
-
-def test_merge_without_raw_headers_does_nothing():
-    from syshttp.cookies import merge_set_cookie_headers
-
-    session = _session_with(("k", "bank.test"))
-    merge_set_cookie_headers(session, type("R", (), {"url": "http://bank.test/", "raw": None, "history": []})())
-    assert [c.name for c in session.cookies] == ["k"]

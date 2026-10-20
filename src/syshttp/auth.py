@@ -2,16 +2,16 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
 
-if TYPE_CHECKING:  # requests is optional at runtime: types only
-    import requests
+if TYPE_CHECKING:  # the client imports this module: types only
+    from .client import HTTPClient
 
 
 __all__ = ("AuthProvider",)
 
 
 class AuthProvider(Protocol):
-    """Something that makes ``session`` authenticated for ``url`` (a login,
-    a token refresh) -- called before a request and again after a 401/403
-    by :func:`.fetch.request_with_reauth`."""
+    """Something that makes ``client`` authenticated for ``url`` (a login,
+    a token refresh): ``HTTPClient`` calls it before each request, and
+    ``fetch(reauth=...)`` again after a 401 or 403."""
 
-    def ensure(self, session: "requests.Session", url: str) -> None: ...
+    def ensure(self, client: "HTTPClient", url: str) -> None: ...

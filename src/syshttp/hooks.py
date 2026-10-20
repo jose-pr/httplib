@@ -11,12 +11,14 @@ its wrapper.
     SYSHTTP_HOOKS_<KEY>_CURL=<command>        a curl front end runs THIS instead of
                                               itself, with its own argv appended
     SYSHTTP_HOOKS_<KEY>_PY=<module:callable>  syshttp calls it before the request:
-                                              callable(session, method, url, kwargs)
+                                              callable(client, method, url, kwargs)
 
-A hook does what it wants with the session (log in, set a header in
+A hook does what it wants with the client (log in, set a header in
 ``kwargs["headers"]``, refresh a token in the jar) and returns ``None`` to
 let the request proceed; anything else it returns is used AS the response
-(a cached or synthetic one). ``kwargs`` is the request's keyword arguments,
+(an ``HTTPResponse``, cached or synthetic). ``kwargs`` is the keyword
+arguments the ``HTTPClient.request()`` call gave (``data``, ``headers``,
+``stream``, ``allow_redirects``, ``timeout``, ``deadline``, ``auth``),
 mutable in place. ``<module:callable>`` is importable from ``sys.path`` or
 a ``<path>.py:callable`` file.
 
@@ -58,8 +60,8 @@ from urllib.parse import urlsplit
 from .env import HTTPEnv
 from .exceptions import ConfigurationError, HookError
 
-if TYPE_CHECKING:  # requests is optional at runtime: types only
-    import requests
+if TYPE_CHECKING:  # the client imports this module: types only
+    from .client import HTTPClient, HTTPResponse
 
 __all__ = (
     "CURL_SUFFIX",
@@ -82,8 +84,8 @@ __all__ = (
     "wrapper_environment",
 )
 
-#: What a ``_PY`` hook is: ``(session, method, url, kwargs) -> None | response``.
-PyHook = Callable[["requests.Session", str, str, Dict[str, Any]], "Optional[requests.Response]"]
+#: What a ``_PY`` hook is: ``(client, method, url, kwargs) -> None | response``.
+PyHook = Callable[["HTTPClient", str, str, Dict[str, Any]], "Optional[HTTPResponse]"]
 
 #: The settings, each read under every prefix: ``HOOKS`` + KEY declares a
 #: hook, the ``HOOK_*`` ones are what a hook run exports to its wrapper.
@@ -246,13 +248,13 @@ def _bare_url(url: str) -> str:
 
 
 def call_py_hooks(
-    session: "requests.Session",
+    client: "HTTPClient",
     method: str,
     url: str,
     kwargs: Dict[str, Any],
     *,
     env: Optional[HTTPEnv] = None,
-) -> "Optional[requests.Response]":
+) -> "Optional[HTTPResponse]":
     """Run every ``_PY`` hook matching ``url`` in order; the first non-None
     result is returned (the caller uses it as the response), else ``None``."""
     for hook in matching(url, kind="py", env=env):
@@ -260,7 +262,7 @@ def call_py_hooks(
             continue
         try:
             fn = load_callable(hook.py)
-            result = fn(session, method, url, kwargs)
+            result = fn(client, method, url, kwargs)
         except Exception as exc:
             # The variable, so the failure is traceable to its declaration;
             # the URL without its userinfo, query and fragment, which carry

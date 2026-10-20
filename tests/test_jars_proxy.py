@@ -169,11 +169,10 @@ def _jars(token="tok123"):
     return cookies, tokens
 
 
-def _session(cookies, tokens):
-    pytest.importorskip("requests")
-    from syshttp.session import new_session
+def _client(cookies, tokens):
+    from syshttp.client import HTTPClient
 
-    return new_session(retries=0, cookies=cookies, tokens=tokens)
+    return HTTPClient(retries=0, cookies=cookies, tokens=tokens)
 
 
 def _names(specs):
@@ -181,40 +180,38 @@ def _names(specs):
 
 
 # --------------------------------------------------------------------------
-# the session
+# the client
 # --------------------------------------------------------------------------
 
 
 def test_connect_proxy_carries_the_origin_cookie_and_token(origin, proxy):
     cookies, tokens = _jars()
-    session = _session(cookies, tokens)
-    resp = session.get(origin + "/x", timeout=5)
-    assert resp.text == "proxy"
+    client = _client(cookies, tokens)
+    resp = client.request("GET", origin + "/x", timeout=5)
+    assert resp.text() == "proxy"
     path, headers = _Proxy.seen[-1]
     assert headers.get("Cookie") == "pre=1"
     assert headers.get("Authorization") == "Bearer tok123", "the ORIGIN's token, as a bearer"
     assert headers.get("Proxy-Authorization") == BEARER
-    assert "Authorization" not in session.headers, "per request, never on the session"
-    # What came back is the origin's: in the response, in the session, in the jar.
-    assert resp.cookies["sid"] == "abc"
-    assert session.cookies.get("sid", domain=ORIGIN_HOST) == "abc"
+    assert "Authorization" not in client.headers, "per request, never on the client"
+    # What came back is the origin's: in the client, in the jar.
     assert _names(cookies[ORIGIN_HOST]) == ["pre", "sid"]
     assert OTHER_HOST not in cookies
+    assert client.request("GET", origin + "/y", timeout=5).text() == "proxy"
+    assert _Proxy.seen[-1][1].get("Cookie") in ("pre=1; sid=abc", "sid=abc; pre=1")
 
 
 def test_prefix_gateway_picks_by_the_origin_host_not_the_gateway(origin, gateway):
     cookies, tokens = _jars()
-    session = _session(cookies, tokens)
-    resp = session.get(origin + "/x", timeout=5)
-    assert resp.text == "gateway"
+    client = _client(cookies, tokens)
+    resp = client.request("GET", origin + "/x", timeout=5)
+    assert resp.text() == "gateway"
     path, headers = _Gateway.seen[-1]
     assert path == "/fetch/" + origin + "/x"
     assert headers.get("Cookie") == "pre=1"
     assert headers.get("Authorization") == "Bearer tok123", "the origin's token, not the gateway host's"
     assert headers.get("Proxy-Authorization") == BEARER
-    assert resp.url == origin + "/x" and resp.request.url == origin + "/x"
-    assert resp.cookies["sid"] == "abc", "per-response cookies are the origin's"
-    assert session.cookies.get("sid", domain=ORIGIN_HOST) == "abc"
+    assert resp.url == origin + "/x"
     assert _names(cookies[ORIGIN_HOST]) == ["pre", "sid"]
     assert OTHER_HOST not in cookies, "nothing is filed under the gateway"
 
@@ -222,18 +219,17 @@ def test_prefix_gateway_picks_by_the_origin_host_not_the_gateway(origin, gateway
 def test_prefix_gateway_without_a_token_for_the_origin_sends_none(origin, gateway):
     cookies = MemoryCookieJar()
     tokens = MemoryTokenJar({OTHER_HOST: "gateway-host-token"})
-    _session(cookies, tokens).get(origin + "/x", timeout=5)
+    _client(cookies, tokens).request("GET", origin + "/x", timeout=5)
     assert "Authorization" not in _Gateway.seen[-1][1]
 
 
 def test_prefix_redirect_keeps_the_origin_token_on_the_next_hop(origin, gateway):
-    """requests drops Authorization when a redirect changes host, judged from
-    response.request.url: with the gateway URL there every hop looked like a
-    host change and the token vanished after the first."""
+    """Every hop through the gateway names the gateway's host on the wire, and
+    the origin's on the response: the token stays with the origin."""
     cookies, tokens = _jars()
-    session = _session(cookies, tokens)
-    resp = session.get(origin + "/redirect", timeout=5)
-    assert resp.text == "gateway" and resp.url == origin + "/final"
+    client = _client(cookies, tokens)
+    resp = client.request("GET", origin + "/redirect", timeout=5)
+    assert resp.text() == "gateway" and resp.url == origin + "/final"
     paths = [p for p, _ in _Gateway.seen]
     assert paths == ["/fetch/" + origin + "/redirect", "/fetch/" + origin + "/final"]
     assert _Gateway.seen[-1][1].get("Authorization") == "Bearer tok123"
@@ -242,8 +238,10 @@ def test_prefix_redirect_keeps_the_origin_token_on_the_next_hop(origin, gateway)
 
 def test_explicit_authorization_and_a_scheme_bearing_token(origin, gateway):
     cookies, tokens = _jars(token="token abc123")
-    session = _session(cookies, tokens)
-    session.get(origin + "/x", timeout=5)
+    client = _client(cookies, tokens)
+    client.request("GET", origin + "/x", timeout=5)
     assert _Gateway.seen[-1][1].get("Authorization") == "token abc123", "a scheme is kept verbatim"
-    session.get(origin + "/x", headers={"Authorization": "Basic explicit"}, timeout=5)
+    client.request("GET", origin + "/x", headers={"Authorization": "Basic explicit"}, timeout=5)
     assert _Gateway.seen[-1][1].get("Authorization") == "Basic explicit", "the caller's header wins"
+    client.request("GET", origin + "/x", auth="Bearer given", timeout=5)
+    assert _Gateway.seen[-1][1].get("Authorization") == "Bearer given", "so does auth="

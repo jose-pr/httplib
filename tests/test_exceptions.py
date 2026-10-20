@@ -64,15 +64,12 @@ def test_a_failing_hook_is_a_hook_error_with_the_hooks_own_exception_as_its_caus
 
 
 def test_a_body_that_is_not_json_is_a_response_error():
-    pytest.importorskip("requests")
-    from syshttp.fetch import request_json
+    from client_fakes import FakeTransport, reply
+    from syshttp import fetch
 
-    class Session:
-        def request(self, **kwargs):
-            return type("R", (), {"status_code": 200, "text": "<html>"})()
-
+    response = fetch("http://h/", transport=FakeTransport(default=reply(200, b"<html>")))
     with pytest.raises(ResponseError, match="HTTP 200"):
-        request_json(Session(), "GET", "http://h/")
+        response.json()
 
 
 def test_a_callers_contradictory_options_are_plain_value_errors():
@@ -90,13 +87,12 @@ def test_a_callers_contradictory_options_are_plain_value_errors():
 
 
 def test_a_token_with_a_line_break_is_a_configuration_error():
-    pytest.importorskip("requests")
+    from syshttp.client import HTTPClient
     from syshttp.jar import MemoryTokenJar
-    from syshttp.session import new_session
 
-    session = new_session(tokens=MemoryTokenJar({"127.0.0.1": "a\nb"}), retries=0, env=HTTPEnv(environ={}))
+    client = HTTPClient(tokens=MemoryTokenJar({"127.0.0.1": "a\nb"}), retries=0, env=HTTPEnv(environ={}))
     with pytest.raises(ConfigurationError, match="127.0.0.1"):
-        session.get("http://127.0.0.1:9/")
+        client.request("GET", "http://127.0.0.1:9/")
 
 
 def test_building_a_client_changes_no_process_wide_warning_filter():

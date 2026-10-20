@@ -1,5 +1,5 @@
-"""The system's TLS client as an ``SSLContext`` -- what the requests session
-(``session``) and a curl front end both connect with.
+"""The system's TLS client as an ``SSLContext`` -- what the client
+(``syshttp.client``) and a curl front end both connect with.
 
 With neither ``cafile`` nor ``capath`` the context is
 ``sslcontext.system_context()``: certificates are verified by the operating

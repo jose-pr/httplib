@@ -111,28 +111,27 @@ class _CountingJar(MemoryCookieJar):
 
 
 def test_ten_responses_without_set_cookie_write_nothing(web):  # noqa: F811
-    from syshttp.session import new_session
+    from syshttp.client import HTTPClient
 
     _CountingJar.writes = 0
-    session = new_session(cookies=_CountingJar(), retries=0, env=web)
+    client = HTTPClient(cookies=_CountingJar(), retries=0, env=web)
     for _ in range(10):
-        _get(session, "http://bank.test/")
+        _get(client, "http://bank.test/")
     assert _CountingJar.writes == 0
-    _get(session, "http://bank.test/", "k=1; Path=/")
-    _get(session, "http://bank.test/")
-    _get(session, "http://bank.test/")
+    _get(client, "http://bank.test/", "k=1; Path=/")
+    _get(client, "http://bank.test/")
+    _get(client, "http://bank.test/")
     assert _CountingJar.writes == 1
 
 
-def test_an_unreadable_session_jar_does_not_empty_the_saved_row(web, monkeypatch):  # noqa: F811
-    import syshttp.session as session_module
+def test_a_response_that_changes_nothing_writes_nothing_and_a_loaded_jar_is_not_rewritten(web):  # noqa: F811
+    from syshttp.client import HTTPClient
 
-    jar = MemoryCookieJar({"bank.test": [CookieSpec("bank.test", "/", False, None, "login", "1")]})
-
-    def broken(cookie, host):
-        raise RuntimeError("dictionary changed size during iteration")
-
-    monkeypatch.setattr(session_module, "_spec_from_cookie", broken)
-    session = session_module.new_session(cookies=jar, retries=0, env=web)
-    _get(session, "http://bank.test/", "other=1; Path=/")
-    assert [c.name for c in jar["bank.test"]] == ["login"]
+    jar = _CountingJar({"bank.test": [CookieSpec(".bank.test", "/", False, None, "login", "1")]})
+    _CountingJar.writes = 0
+    client = HTTPClient(cookies=jar, retries=0, env=web)
+    assert _get(client, "http://bank.test/") == "login=1"
+    _get(client, "http://bank.test/", "login=1; Domain=bank.test; Path=/")
+    assert _CountingJar.writes == 0, "the same row again is no change"
+    _get(client, "http://bank.test/", "login=2; Domain=bank.test; Path=/")
+    assert _CountingJar.writes == 1

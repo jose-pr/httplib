@@ -125,7 +125,7 @@ def refused_redirect(method: str, url: str, resp: HTTPResponse, location, reason
     )
 
 
-def _discard(resp: HTTPResponse) -> None:
+def discard(resp: HTTPResponse) -> None:
     """Gives up the rest of a body nobody wants, reading a small one so the
     connection can serve the next request."""
     try:
@@ -179,15 +179,15 @@ def send_following(
             return resp
         location = redirect_location(current, resp)
         if location is None:
-            _discard(resp)
+            discard(resp)
             raise refused_redirect(method, current, resp, None, "no usable Location")
         if hops >= MAX_REDIRECTS:
-            _discard(resp)
+            discard(resp)
             raise OSError(
                 _errno.EIO,
                 f"more than {MAX_REDIRECTS} redirects from {shown(url)}",
             )
-        _discard(resp)
+        discard(resp)
         if resp.status == 303 and method != "HEAD":
             method = "GET"
         current = location
@@ -230,7 +230,7 @@ def send_once(
     elif not can_resend_body(body):
         reason = "the request body cannot be sent twice"
     else:
-        _discard(resp)
+        discard(resp)
         resp = transport.send(
             method,
             location,
@@ -243,5 +243,5 @@ def send_once(
             return resp
         url, location = location, redirect_location(location, resp)
         reason = "a second redirect"
-    _discard(resp)
+    discard(resp)
     raise refused_redirect(method, url, resp, location, reason)

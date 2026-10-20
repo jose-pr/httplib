@@ -45,12 +45,11 @@ def test_the_client_uses_the_configured_header_name(origin, gateway, monkeypatch
 
 
 def test_syshttp_typing_never_imports_requests_at_runtime():
-    """The annotations name requests' types under TYPE_CHECKING only: the
-    dependency-free modules stay dependency-free, and session/fetch import
-    requests lazily, inside new_session."""
+    """The client, the hooks and the jars never import requests: only
+    syshttp.autopatch does, for the program that imports it."""
     code = (
         "import sys; sys.path.insert(0, %r); "
-        "import syshttp.session, syshttp.fetch, syshttp.hooks, syshttp.cookies, syshttp.auth, syshttp.jar; "
+        "import syshttp, syshttp.client, syshttp.hooks, syshttp.cookies, syshttp.auth, syshttp.jar; syshttp.fetch; "
         "print('requests' in sys.modules)" % str(SRC)
     )
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout.strip()

@@ -1,4 +1,4 @@
-"""The session's own state and secrets: the User-Agent it was given, hooks in
+"""The client's own state and secrets: the User-Agent it was given, hooks in
 one thread not switching them off in another, and credentials that would end
 a header refused without echoing them."""
 
@@ -8,11 +8,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-pytest.importorskip("requests")
-
+from syshttp.client import HTTPClient  # noqa: E402
 from syshttp.env import HTTPEnv  # noqa: E402
 from syshttp.jar import MemoryTokenJar  # noqa: E402
-from syshttp.session import new_session  # noqa: E402
 
 
 class _Echo(BaseHTTPRequestHandler):
@@ -41,8 +39,8 @@ def echo():
 
 
 def test_the_given_user_agent_is_the_one_on_the_wire(echo):
-    session = new_session(retries=0, user_agent="mytool/1.0", env=HTTPEnv(environ={}))
-    assert session.get(echo, timeout=5).text.split("|")[0] == "mytool/1.0"
+    client = HTTPClient(retries=0, user_agent="mytool/1.0", env=HTTPEnv(environ={}))
+    assert client.request("GET", echo, timeout=5).text().split("|")[0] == "mytool/1.0"
 
 
 _hook_calls = []
@@ -50,7 +48,7 @@ _entered = threading.Event()
 _release = threading.Event()
 
 
-def _hook(session, method, url, kwargs):
+def _hook(client, method, url, kwargs):
     _hook_calls.append(threading.current_thread().name)
     if len(_hook_calls) == 1:
         _entered.set()
@@ -64,12 +62,12 @@ def test_a_hook_in_one_thread_does_not_switch_hooks_off_in_another(echo):
     del _hook_calls[:]
     _entered.clear()
     _release.clear()
-    env = HTTPEnv(environ={"SYSHTTP_HOOKS_X": ".", "SYSHTTP_HOOKS_X_PY": "test_session_guards:_hook"})
-    session = new_session(retries=0, env=env)
+    env = HTTPEnv(environ={"SYSHTTP_HOOKS_X": ".", "SYSHTTP_HOOKS_X_PY": "test_client_guards:_hook"})
+    client = HTTPClient(retries=0, env=env)
     bodies = {}
 
     def get(name):
-        bodies[name] = session.get(echo, timeout=15).text
+        bodies[name] = client.request("GET", echo, timeout=15).text()
 
     first = threading.Thread(target=get, args=("first",), name="first")
     first.start()
@@ -83,9 +81,9 @@ def test_a_hook_in_one_thread_does_not_switch_hooks_off_in_another(echo):
 
 def test_a_token_with_a_line_break_is_refused_without_echoing_it(echo):
     jar = MemoryTokenJar({"127.0.0.1": "SECRET-PART-1\nSECRET-PART-2"})
-    session = new_session(retries=0, tokens=jar, env=HTTPEnv(environ={}))
+    client = HTTPClient(retries=0, tokens=jar, env=HTTPEnv(environ={}))
     with pytest.raises(ValueError) as caught:
-        session.get(echo, timeout=5)
+        client.request("GET", echo, timeout=5)
     assert "SECRET" not in str(caught.value) and "127.0.0.1" in str(caught.value)
 
 
@@ -93,7 +91,7 @@ def test_a_token_with_a_line_break_is_refused_without_echoing_it(echo):
 def test_a_proxy_credential_with_a_line_break_names_the_variable_not_the_value(value):
     env = HTTPEnv(environ={"SYSHTTP_PROXY": "http://proxy.example:3128", "SYSHTTP_PROXY_AUTH": value})
     with pytest.raises(ValueError) as caught:
-        new_session(env=env)
+        HTTPClient(env=env)
     assert "SYSHTTP_PROXY_AUTH" in str(caught.value) and "SECRET" not in str(caught.value)
 
 

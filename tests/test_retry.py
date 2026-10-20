@@ -1,5 +1,5 @@
 """retry_after: the seconds a Retry-After header asks for, and the statuses
-the session and a curl front end retry."""
+the client and a curl front end retry."""
 
 import pytest
 

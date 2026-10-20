@@ -2,54 +2,29 @@
 survive a round trip, file names every filesystem takes, and a failing hook
 that names its variable."""
 
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
-
 import pytest
 
 from syshttp import hooks
+from test_cookies import _client, _get, _jar, web  # noqa: F401  (web is a fixture)
 
 
-class _SetCookie(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Set-Cookie", "sid=abc; Path=/; HttpOnly; Max-Age=3600")
-        self.send_header("Set-Cookie", "flash=1; Path=/")
-        self.send_header("Content-Length", "2")
-        self.end_headers()
-        self.wfile.write(b"ok")
+def test_secure_jar_rows_stay_secure_in_the_client(web):  # noqa: F811
+    from syshttp.cookies import CookieSpec
+    from syshttp.jar import MemoryCookieJar
 
-    def log_message(self, *a):
-        pass
-
-
-@pytest.fixture()
-def origin():
-    httpd = HTTPServer(("127.0.0.1", 0), _SetCookie)
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    try:
-        yield "http://127.0.0.1:%d" % httpd.server_address[1]
-    finally:
-        httpd.shutdown()
-        httpd.server_close()
-
-
-def test_secure_jar_rows_stay_secure_in_the_session():
-    pytest.importorskip("requests")
-    import requests
-
-    from syshttp.cookies import CookieSpec, apply_to_session
-
-    session = requests.Session()
-    apply_to_session(
-        session,
-        [
-            CookieSpec(domain="h.example", path="/", secure=True, expires=None, name="s", value="1"),
-            CookieSpec(domain="h.example", path="/", secure=False, expires=4102444800, name="p", value="2"),
-        ],
+    jar = MemoryCookieJar(
+        {
+            "h.example": [
+                CookieSpec(domain="h.example", path="/", secure=True, expires=None, name="s", value="1"),
+                CookieSpec(domain="h.example", path="/", secure=False, expires=4102444800, name="p", value="2"),
+            ]
+        }
     )
-    flags = {c.name: (c.secure, c.expires) for c in session.cookies}
+    client = _client(web, cookies=jar)
+    assert _get(client, "http://h.example/") == "p=2", "a Secure row is not sent over http"
+    flags = {c.name: (c.secure, c.expires) for c in client._cookies._rows.values()}
     assert flags["s"] == (True, None) and flags["p"] == (False, 4102444800)
+    assert _jar(client) == [("p", "h.example", "/", "2"), ("s", "h.example", "/", "1")]
 
 
 def test_jar_file_names_are_filesystem_safe(tmp_path):
@@ -83,15 +58,12 @@ def test_a_failing_py_hook_names_its_variable(monkeypatch):
         hooks.call_py_hooks(None, "GET", "https://h/x", {})
 
 
-def test_a_hosts_cookie_file_holds_that_hosts_cookies_only(origin):
-    pytest.importorskip("requests")
+def test_a_hosts_cookie_file_holds_that_hosts_cookies_only(web):  # noqa: F811
     from syshttp.jar import MemoryCookieJar
-    from syshttp.session import new_session
 
     jar = MemoryCookieJar()
-    session = new_session(retries=0, cookies=jar)
-    session.cookies.set("elsewhere", "1", domain="other.example", path="/")
-    session.get(origin + "/setcookie", timeout=5)
-    names = sorted(c.name for c in jar["127.0.0.1"])
-    assert names == ["flash", "sid"], "other.example's cookie is not written under 127.0.0.1"
-    assert "other.example" not in jar
+    client = _client(web, cookies=jar)
+    _get(client, "http://elsewhere.example/", "other=1; Path=/")
+    _get(client, "http://origin.example/", "sid=abc; Path=/", "flash=1; Path=/")
+    assert sorted(c.name for c in jar["origin.example"]) == ["flash", "sid"]
+    assert [c.name for c in jar["elsewhere.example"]] == ["other"]

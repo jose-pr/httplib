@@ -11,7 +11,7 @@ __all__ = ("ConfigurationError", "HookError", "ResponseError", "SysHTTPError")
 
 class SysHTTPError(Exception):
     """The base of every error syshttp raises for what went wrong at run time
-    (proxylib's and requests' own errors pass through as they are)."""
+    (proxylib's own errors pass through as they are)."""
 
 
 class ConfigurationError(SysHTTPError, ValueError):

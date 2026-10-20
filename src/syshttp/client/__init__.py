@@ -19,15 +19,18 @@ from . import _settings
 from ._client import DEFAULT_TIMEOUT, HTTPClient
 from ._context import CA_BUNDLE
 from ._default import DEFAULT_TRANSPORT
+from ._fetch import fetch
 from ._follow import is_redirect, split_userinfo
 from ._headers import Headers, peer_text
 from ._prepare import PreparedRequest, prepare_request
 from ._response import HTTPResponse
+from ._state import COOKIE_HOSTS
 from ._status import HTTPStatusError, drop_body, json_body, raise_for_status, read_limited
 from ._transport import HTTPTransport, Transport
 
 __all__ = [
     "CA_BUNDLE",
+    "COOKIE_HOSTS",
     "DEFAULT_TIMEOUT",
     "DEFAULT_TRANSPORT",
     "HTTPClient",
@@ -39,6 +42,7 @@ __all__ = [
     "PreparedRequest",
     "Transport",
     "drop_body",
+    "fetch",
     "is_redirect",
     "json_body",
     "peer_text",

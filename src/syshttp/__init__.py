@@ -42,6 +42,7 @@ __all__ = [
     "ResponseError",
     "SysHTTPError",
     "configured_proxy",
+    "fetch",
     "proxy_map",
     "proxy_type",
 ]
@@ -57,6 +58,10 @@ def __getattr__(name: str) -> Any:
         from . import proxy
 
         return getattr(proxy, name)
+    if name == "fetch":
+        from .client import fetch
+
+        return fetch
     raise AttributeError("module %r has no attribute %r" % (__name__, name))
 
 

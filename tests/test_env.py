@@ -172,7 +172,7 @@ def test_importing_reads_no_variable():
     code = (
         "import sys; sys.path.insert(0, %r); "
         "import syshttp, syshttp.env, syshttp.proxy, syshttp.jar, syshttp.hooks, syshttp.cookies, "
-        "syshttp.tls, syshttp.retry, syshttp.client, syshttp.session, syshttp.fetch; print('ok')" % str(SRC)
+        "syshttp.tls, syshttp.retry, syshttp.client; print('ok')" % str(SRC)
     )
     run = subprocess.run(
         [sys.executable, "-c", code],
