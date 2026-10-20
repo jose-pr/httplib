@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-20
+
 ### Added
 
 - `syshttp.client`: an HTTP client on the standard library, so that no feature
@@ -337,4 +339,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   longer with the userinfo, query and fragment (`user:pass@`,
   `?access_token=`).
 
-[Unreleased]: https://github.com/jose-pr/syshttp/commits/main
+[Unreleased]: https://github.com/jose-pr/syshttp/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/jose-pr/syshttp/releases/tag/v0.1.0
