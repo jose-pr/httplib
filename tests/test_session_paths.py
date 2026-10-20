@@ -133,12 +133,12 @@ def test_an_https_proxy_is_spoken_to_with_the_proxy_context(mtls_server, secure_
 
     env = HTTPEnv(environ={"SYSHTTP_PROXY": secure_tunnel.url, "SYSHTTP_PROXY_AUTH": BEARER})
     origin = _client()
-    ok = new_session(retries=0, ssl_context=origin, proxy_ssl_context=_client(), env=env).get(mtls_server, timeout=10)
+    with new_session(retries=0, ssl_context=origin, proxy_ssl_context=_client(), env=env) as session:
+        ok = session.get(mtls_server, timeout=10)
     assert ok.text.split()[0] == "client-rsa" and len(secure_tunnel.seen) == 1
-    with pytest.raises(requests.exceptions.RequestException):
-        new_session(retries=0, ssl_context=origin, proxy_ssl_context=_client(identity=False), env=env).get(
-            mtls_server, timeout=10
-        )
+    with new_session(retries=0, ssl_context=origin, proxy_ssl_context=_client(identity=False), env=env) as session:
+        with pytest.raises(requests.exceptions.RequestException):
+            session.get(mtls_server, timeout=10)
 
 
 class _Hop(BaseHTTPRequestHandler):

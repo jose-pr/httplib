@@ -114,10 +114,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   text)`) passed on. The `*_auto` helpers take `new_session`'s options as
   `**session_options` (every keyword they had still works) and their
   `timeout` may be a `(connect, read)` pair.
-- The `session` extra requires `requests>=2.32.3` and `urllib3>=2.0.2`
-  (was `requests>=2.25`). Below 2.32.3 a caller's `ssl_context` was silently
-  ignored, and urllib3 1.26 raises a bare `ValueError` for an https IP-literal
-  host. On Python 3.9, botocore pins `urllib3<1.27`, so `syshttp[session]`
+- Every dependency's floor is its newest release that supports Python 3.9:
+  the `session` extra requires `requests>=2.32.5` and `urllib3>=2.6.3` (was
+  `requests>=2.25`), and `sslcontext>=2.1.0`. Below requests 2.32.3 a caller's
+  `ssl_context` was silently ignored, urllib3 1.26 raises a bare `ValueError`
+  for an https IP-literal host, and urllib3 up to 2.2 leaks the socket of a
+  failed TLS handshake through an https proxy. On Python 3.9, botocore pins `urllib3<1.27`, so `syshttp[session]`
   cannot share an environment with it there.
 
 

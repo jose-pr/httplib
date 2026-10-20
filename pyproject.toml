@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "syshttp"
-version = "0.1.0.dev16"
+version = "0.1.0.dev17"
 authors = [{ name = "jose-pr", email = "jose-pr@coqui.dev" }]
 description = "HTTP plumbing that follows the system: the system proxy (PAC, WPAD) and the OS certificate verifier by default, proxy credentials and prefix gateways, Netscape cookie jars, OS trust-store TLS, URL hooks, and an optional requests session"
 readme = "README.md"
@@ -25,6 +25,8 @@ classifiers = [
     "Topic :: Internet :: WWW/HTTP",
     "Typing :: Typed",
 ]
+# Every floor is the newest release that still supports Python 3.9: the one
+# version line tested, on every supported Python.
 dependencies = [
     # The system's proxy configuration (WinHTTP, macOS, libproxy/desktops; PAC
     # and WPAD) is the default route when no proxy variable is set.
@@ -32,9 +34,9 @@ dependencies = [
     # The system's TLS client: the OS verifies certificates (through
     # truststore on Python 3.10+) and a server asking for a client certificate
     # gets one from the OS store, chosen as a browser would.
-    "sslcontext>=2.0.0,<3",
+    "sslcontext>=2.1.0,<3",
     # Patches requests, urllib, httpx, aiohttp and pip as they are imported, when
-    # <PREFIX>_SYSHTTP_IMPORTPATCH asks for it (syshttp.autopatch, the entry points below).
+    # SYSHTTP_IMPORTPATCH asks for it (syshttp.autopatch, the entry points below).
     "importpatch>=0.2.1,<0.3",
 ]
 
@@ -49,13 +51,12 @@ aiohttp = "syshttp.autopatch"
 # requests backs syshttp.session and syshttp.fetch only, imported when a
 # session is built; importing syshttp never needs it.
 session = [
-    # 2.32.3 is the first requests with HTTPAdapter.build_connection_pool_key_attributes,
-    # the hook that hands a pool its ssl_context; below it ssl_context is ignored.
-    "requests>=2.32.3,<3",
-    # urllib3 1.26 raises a bare ValueError for an https IP-literal host when the
-    # pool's context checks hostnames; 2.x passes the server_hostname it needs
-    # (2.0.0 and 2.0.1 are yanked).
-    "urllib3>=2.0.2,<3",
+    # Below 2.32.3 requests has no HTTPAdapter.build_connection_pool_key_attributes,
+    # the hook that hands a pool its ssl_context.
+    "requests>=2.32.5,<3",
+    # urllib3 1.26 raises a bare ValueError for an https IP-literal host; 2.x up
+    # to 2.2 leaks the socket of a failed TLS handshake through an https proxy.
+    "urllib3>=2.6.3,<3",
 ]
 # A JavaScript engine for PAC scripts proxylib evaluates itself (Linux without
 # libproxy); Windows and macOS evaluate PAC in the OS.

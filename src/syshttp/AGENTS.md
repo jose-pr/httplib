@@ -19,8 +19,8 @@ sslcontext (the system's TLS client; truststore on Python 3.10+) and
 importpatch (import-time patching of other HTTP clients, off unless
 `SYSHTTP_IMPORTPATCH` asks for it). The extra `pac`
 adds a JavaScript engine for PAC scripts proxylib evaluates itself (Linux
-without libproxy). The extra `session` adds `requests` 2.32.3+ and `urllib3` 2.0.2+ (older
-versions ignore a caller's `ssl_context` or fail on an IP-literal host), which
+without libproxy). The extra `session` adds `requests` 2.32.5+ and `urllib3` 2.6.3+ (each
+floor is the newest release that supports Python 3.9), which
 `syshttp.session` and
 `syshttp.fetch` import when a session is built. Without it, `new_session()`
 raises `ImportError` saying `pip install 'syshttp[session]'`. Every other
@@ -501,7 +501,7 @@ def patched() -> tuple[str, ...]
     call, or `session.proxies`) is used as given, without syshttp's
     credential, and a session with `trust_env = False` is left to requests.
     Every `HTTPAdapter` with `verify=True` and no context of its own pool
-    manager verifies with `tls.os_ssl_context()` (requests 2.32.3+).
+    manager verifies with `tls.os_ssl_context()`.
   - **urllib**: proxylib's global opener (installed when the program has
     not installed its own) routes `urlopen`, through the first reachable
     entry (`Probed`; none reachable: `URLError` whose `reason` is
