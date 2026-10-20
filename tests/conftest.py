@@ -32,3 +32,12 @@ def _no_ambient_settings(monkeypatch):
 
     monkeypatch.setattr(sslcontext, "system_context", system_context)
     monkeypatch.setattr("syshttp.tls._os_context", None)
+
+
+@pytest.fixture
+def http_transport():
+    """A default transport, closed after the test."""
+    from syshttp.client import HTTPTransport
+
+    with HTTPTransport() as transport:
+        yield transport
