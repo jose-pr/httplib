@@ -35,9 +35,11 @@ together. Documentation: <https://jose-pr.github.io/syshttp/>.
   `GET https://api.example.com/x` to `<proxy>/fetch/https://api.example.com/x`
   (requests, httpx and urllib). Responses, redirects and cookies still use
   the caller's URL.
-- **One prefix for every setting** — `SYSHTTP_PREFIX=MYTOOL` makes the
-  package read `MYTOOL_PROXY`, `MYTOOL_HOME` and so on. An `HTTPEnv(prefix=...)`
-  object keeps one configuration apart from another in the same process.
+- **Prefixes of a tool's own** — `SYSHTTP_PREFIX=MYTOOL_` makes the package
+  read `MYTOOL_HTTPS_PROXY`, `MYTOOL_SYSHTTP_HOME` and so on instead of the
+  defaults; `MYTOOL_:` falls back to them, variable by variable. An
+  `HTTPEnv("MYTOOL_")` object keeps one configuration apart from another in
+  the same process.
 - **Cookie and token jars** — Netscape cookie files with curl's matching
   rules, plus per-host token files. Both are chosen by the origin's host,
   never by the proxy's or the gateway's.
@@ -103,7 +105,7 @@ A separate configuration, isolated from the process environment:
 from syshttp import HTTPEnv
 from syshttp.session import new_session
 
-env = HTTPEnv("MYTOOL", environ={"MYTOOL_PROXY": "http://proxy.internal:3128"})
+env = HTTPEnv("MYTOOL_", environ={"MYTOOL_SYSHTTP_PROXY": "http://proxy.internal:3128"})
 s = new_session(env=env)
 ```
 
@@ -111,7 +113,7 @@ s = new_session(env=env)
 
 | Module | Purpose |
 | --- | --- |
-| `syshttp.env` | `HTTPEnv`: the prefix and mapping every setting is read from |
+| `syshttp.env` | `HTTPEnv`: the prefixes and mapping every setting is read from |
 | `syshttp.proxy` | `proxy_map()`: the settings as one proxylib proxy map |
 | `syshttp.session` | `new_session()`: a configured `requests.Session` |
 | `syshttp.fetch` | text and JSON request helpers, retry once after a 401/403 |
@@ -124,21 +126,23 @@ s = new_session(env=env)
 
 ## Settings
 
-Every setting is `<PREFIX>_<NAME>`, with the prefix from `SYSHTTP_PREFIX`
-(default `SYSHTTP`). The full list is on the docs site:
+Every setting is read as `<PREFIX><NAME>` for each prefix of
+`SYSHTTP_PREFIX` (`:`-separated; default none, the names as written). The
+full list is on the docs site:
 <https://jose-pr.github.io/syshttp/settings/>.
 
 | Variable | Sets |
 | --- | --- |
-| `SYSHTTP_PREFIX` | the prefix of every other setting |
+| `SYSHTTP_PREFIX` | the prefixes every other setting is read under |
 | `SYSHTTP_PROXY` | the proxy URL; else `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, else the system's |
 | `SYSHTTP_SYSTEM_PROXY` | `0` to stop consulting the system's proxy configuration |
 | `SYSHTTP_PROXY_AUTH` | the proxy credential, sent verbatim; else `HTTP_PROXY_AUTH` |
 | `SYSHTTP_PROXY_AUTH_HEADER` | the header it is sent in (default `Proxy-Authorization`) |
 | `SYSHTTP_PROXY_TYPE` | `connect` (default) or `prefix[:/endpoint]` |
 | `SYSHTTP_HOME` | the jar directory (default: the per-user state directory) |
-| `SYSHTTP_IMPORTPATCH` | `1`, or `:`-separated names: the client libraries patched on import (`<PREFIX>_SYSHTTP_IMPORTPATCH` under a prefix of a tool's own) |
+| `SYSHTTP_IMPORTPATCH` | `1`, or `:`-separated names: the client libraries patched on import |
 | `SYSHTTP_HOOKS_<KEY>` | a URL hook's pattern, with `_PY` / `_CURL` targets |
+| `CA_BUNDLE` | the CA bundle a session verifies with (default: the OS verifier) |
 
 ## Development
 

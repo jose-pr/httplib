@@ -37,7 +37,7 @@ The 3.9 venv needs `pip install --upgrade pip` before an editable install
 ## Conventions
 
 - A setting is read through `HTTPEnv` at call time, never at import.
-  Messages name the full variable (`env.name(...)`).
+  Messages name the variable found (`env.find(...)`), else `env.name(...)`.
 - `requests` is imported inside functions only, and under `TYPE_CHECKING` for
   annotations. `test_syshttp_typing_never_imports_requests_at_runtime`
   enforces this.

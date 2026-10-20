@@ -18,25 +18,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `ValueError` / `TypeError`.
 - Every public module declares `__all__` (`proxy` also lists its setting-name
   constants, `PROXY` and `DEFAULT_AUTH_HEADER` among them).
-- `syshttp.env.HTTPEnv(prefix=None, environ=None)`: every setting is
-  `<PREFIX>_<NAME>`, with the prefix from `SYSHTTP_PREFIX` (default `SYSHTTP`).
-  `prefix=""` reads only the conventional variables (`HTTPS_PROXY` and the
-  rest of that family, `NO_PROXY`, `HTTP_PROXY_AUTH`). Every function that
-  reads a setting takes `env=`, `new_session()` and the `fetch` `*_auto`
-  helpers included.
+- `syshttp.env.HTTPEnv(prefixes=None, environ=None)`: every setting is a
+  variable with a full name -- syshttp's own carry `SYSHTTP_`
+  (`SYSHTTP_PROXY`, `SYSHTTP_HOME`, `SYSHTTP_HOOKS_<KEY>`,
+  `SYSHTTP_IMPORTPATCH`), conventional ones keep theirs (`HTTPS_PROXY`,
+  `NO_PROXY`, `HTTP_PROXY_AUTH`, `CA_BUNDLE`) -- read as `<PREFIX><NAME>` for
+  each prefix of `SYSHTTP_PREFIX` in turn, a `:`-separated list used
+  literally (default: one empty prefix, the names as written). The first
+  prefix that sets a variable wins, each variable on its own:
+  `SYSHTTP_PREFIX=MYTOOL_` reads only `MYTOOL_<NAME>`, `MYTOOL_:` falls back
+  to the unprefixed names. `find()` returns the variable found with its
+  value, for messages. Every function that reads a setting takes `env=`,
+  `new_session()` and the `fetch` `*_auto` helpers included.
+- `CA_BUNDLE` (under the prefixes) names the CA bundle a session's
+  `verify=True` uses; sessions no longer read requests' own
+  `REQUESTS_CA_BUNDLE` / `CURL_CA_BUNDLE`.
 - The system's proxy configuration is the last proxy source, decided for the
   URL being requested: WinHTTP on Windows, CFNetwork on macOS, libproxy or the
   desktop's settings elsewhere, PAC scripts and WPAD included (through
-  proxylib, a new dependency). It comes after `<PREFIX>_PROXY` and the
+  proxylib, a new dependency). It comes after `SYSHTTP_PROXY` and the
   `*_PROXY` variables, after the `NO_PROXY` check, and is always spoken to as
-  `connect`. `<PREFIX>_SYSTEM_PROXY=0` turns it off. `proxy.plan()`,
+  `connect`. `SYSHTTP_SYSTEM_PROXY=0` turns it off. `proxy.plan()`,
   `proxy_url()`, `resolve()` and `proxy_authorization()` take the request URL
   (`url=` / `target=`). `proxy.configured_proxy_url()` gives the
   environment's answer alone. The `pac` extra adds a JavaScript engine for PAC
   scripts proxylib evaluates itself (Linux without libproxy).
 - `syshttp.autopatch`: `SYSHTTP_IMPORTPATCH=1` (or `:`-separated names:
-  `requests`, `urllib`, `httpx`, `aiohttp`; `<PREFIX>_SYSHTTP_IMPORTPATCH`
-  under a prefix of a tool's own) patches those libraries as they are imported,
+  `requests`, `urllib`, `httpx`, `aiohttp`; read under the prefixes like
+  every setting) patches those libraries as they are imported,
   in any program of the environment, so requests without a proxy or TLS
   setting of the caller's route by syshttp and verify with the system's
   context. Through importpatch, a new dependency, and its entry points;
@@ -51,12 +60,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   every https origin, or for an `https://` proxy. That covers mutual TLS,
   ciphers and protocol versions. It cannot be combined with a `verify` other
   than `True`.
-- `hooks.wrapper_environment()`: the `<PREFIX>_HOOK_*` variables a `_CURL`
+- `hooks.wrapper_environment()`: the `SYSHTTP_HOOK_*` variables a `_CURL`
   wrapper run receives.
 - `jar.default_root()`: the per-user state directory used when
-  `<PREFIX>_HOME` is unset.
+  `SYSHTTP_HOME` is unset.
 - `syshttp.__version__`.
-- Hosts that share cookies: `<PREFIX>_COOKIE_HOSTS` (hosts split by `,`,
+- Hosts that share cookies: `SYSHTTP_COOKIE_HOSTS` (hosts split by `,`,
   groups by `;`) or `new_session(cookie_hosts=...)` declares names that reach
   one service. In a group, a cookie a member sets for itself or another
   member belongs to the first host, every member's requests carry the
@@ -73,11 +82,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Routing is proxylib 2's (`proxylib>=2.0.2,<3`; 2.0.1 breaks pip's cached
   requests). `proxy.proxy_map(proxy,
   noproxy, proxy_user, *, env)` is the settings as one proxylib proxy map,
-  read at each lookup; `proxy.configured_proxy()` is `<PREFIX>_PROXY` as a
+  read at each lookup; `proxy.configured_proxy()` is `SYSHTTP_PROXY` as a
   proxylib `Proxy`; `proxy.system_map()` is the system's configuration
   (`proxylib.auto_proxy`). The `*_PROXY` variables are read per scheme
   (lowercase first, httpoxy-safe), `NO_PROXY` takes CIDR entries, and curl's
-  `-x ""` is direct. `<PREFIX>_PROXY_AUTH` goes to `<PREFIX>_PROXY` only and
+  `-x ""` is direct. `SYSHTTP_PROXY_AUTH` goes to `SYSHTTP_PROXY` only and
   `HTTP_PROXY_AUTH` to the machine's proxies only.
 - A list from the system (`PROXY a; PROXY b; DIRECT`) is tried in order by the
   session, httpx and aiohttp (proxylib's failover), replacing the probe of
@@ -111,8 +120,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   host. On Python 3.9, botocore pins `urllib3<1.27`, so `syshttp[session]`
   cannot share an environment with it there.
 
-- `HTTPEnv` refuses the prefix `HTTP` and any starting `HTTP_`, which it
-  accepted.
 
 - The header says that jars, tokens, `_PY` hooks and `auth_provider` apply to
   `session.request` and not to a bare `session.send()`, which gets the proxy
@@ -142,8 +149,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `AGENTS_PROXY_AUTH` → `SYSHTTP_PROXY_AUTH`, `AGENTS_PROXY_AUTH_HEADER` →
   `SYSHTTP_PROXY_AUTH_HEADER`, `AGENTS_PROXY_TYPE` → `SYSHTTP_PROXY_TYPE`,
   `AGENTS_HOME` → `SYSHTTP_HOME`, `NET_HOOKS_<KEY>` → `SYSHTTP_HOOKS_<KEY>`,
-  `NET_HOOK_*` → `SYSHTTP_HOOK_*`. To keep the `AGENTS_*` names, set
-  `SYSHTTP_PREFIX=AGENTS` (hooks are then `AGENTS_HOOKS_<KEY>`).
+  `NET_HOOK_*` → `SYSHTTP_HOOK_*`. A tool's own namespace is a prefix:
+  `SYSHTTP_PREFIX=AGENTS_` reads `AGENTS_SYSHTTP_PROXY`,
+  `AGENTS_SYSHTTP_HOOKS_<KEY>` and so on.
 - The system's TLS client by default: `tls.new_os_context()` (and so
   `os_ssl_context()` and every session with `verify=True`) returns
   `sslcontext.system_context()` (sslcontext 2 is a new dependency).
@@ -158,7 +166,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   every redirect hop, from the environment as it is then and the system's
   answer for that URL. A direct decision is final: requests' `trust_env` cannot
   re-add a proxy. `adapter.route(url)` shows the decision.
-- Without `<PREFIX>_HOME`, the jars live in the per-user state directory
+- Without `SYSHTTP_HOME`, the jars live in the per-user state directory
   instead of the dotagents store directory.
 - `proxy.resolve()` and `proxy.proxy_authorization()`: the keyword `env: bool`
   is now `configured: bool`.
@@ -218,14 +226,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   other threads' requests skipped hooks and `ensure`.
 - A request-level `verify=` (`False`, or a bundle) beside `ssl_context`, which
   was silently ignored, raises `ValueError` as the same value does at session
-  level. `REQUESTS_CA_BUNDLE` / `CURL_CA_BUNDLE` are not a request-level
-  value.
+  level. `CA_BUNDLE` is not a request-level value, and a session with an
+  `ssl_context` does not consult it.
 - The import patch replaces requests 2.32.3's own default context (a certifi
   bundle) in a pool, as it does for the later versions that leave it out.
 - Token and cookie files are replaced whole by a rename, so a reader never sees
   an empty or half-written file and concurrent savers no longer truncate each
   other's file.
-- `<PREFIX>_HOME=~/jars` is expanded instead of creating a directory named `~`.
+- `SYSHTTP_HOME=~/jars` is expanded instead of creating a directory named `~`.
 - Jar files are written with LF on Windows too, as curl writes them.
 - A session whose cookie jar cannot be read (an error while iterating
   `session.cookies`) no longer saves an empty list over the host's cookies, and
@@ -253,9 +261,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - A token, or a proxy credential, containing CR, LF or NUL raises a
   `ValueError` that names the jar key or variable instead of requests'
   `InvalidHeader` carrying the whole secret.
-- The prefix `HTTP`, and any starting `HTTP_`, is refused (`ValueError`): CGI
-  exports every request header as `HTTP_*`, so a client could choose the
-  settings and the hooks (`HOOKS_<KEY>_PY` names code to import).
+- No setting can be chosen by a CGI client unless the program reads the
+  unprefixed names: syshttp's own all start `SYSHTTP_`, which a request
+  header never becomes, and a CGI program sets a prefix list without the
+  empty entry so that `HTTP_PROXY` and `HTTP_PROXY_AUTH` are not read.
 - A failing hook's message names its URL as scheme, host, port and path, no
   longer with the userinfo, query and fragment (`user:pass@`,
   `?access_token=`).

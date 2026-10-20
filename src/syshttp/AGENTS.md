@@ -30,45 +30,54 @@ module works without it.
 
 ## Settings (`syshttp.env`)
 
-Every setting is the variable `<P>_<NAME>`, with `<P>` the prefix: the
-`prefix` argument of an `HTTPEnv`, else `SYSHTTP_PREFIX`, else `SYSHTTP`.
-Conventional variables (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`,
-`HTTP_PROXY_AUTH`) keep their names under every prefix. Order: an explicit
-argument, then the variable, then the built-in default. Nothing is read at
-import; each call reads the environment as it is then.
+Every setting is a variable with a full name: syshttp's own carry
+`SYSHTTP_` (`SYSHTTP_PROXY`, `SYSHTTP_HOME`, `SYSHTTP_HOOKS_<KEY>`),
+conventional ones keep theirs (`HTTPS_PROXY`, `NO_PROXY`, `CA_BUNDLE`). Each
+is read as `<PREFIX><NAME>` for every prefix in turn, the first one set (and
+not blank) winning, each name on its own. The prefixes are the `prefixes`
+argument of an `HTTPEnv`, else `SYSHTTP_PREFIX` (a `:`-separated list), else
+one empty prefix: the names as written. A prefix is used literally, so it
+carries its own separator (`AGENTS_`). Order: an explicit argument, then the
+variable, then the built-in default. Nothing is read at import; each call
+reads the environment as it is then. Below, every name is given as written,
+under the empty prefix.
 
 ```python
 class HTTPEnv:
-    def __init__(self, prefix: str | None = None, environ: Mapping[str, str] | None = None) -> None
+    def __init__(self, prefixes: str | Iterable[str] | None = None,
+                 environ: Mapping[str, str] | None = None) -> None
     environ: Mapping[str, str]          # property: the mapping read (os.environ when None)
-    prefix: str                         # property: the prefix in force, upper case
-    def name(self, setting: str) -> str | None
-    def get(self, setting: str) -> str | None
-    def conventional(self, *names: str) -> str | None
-    def family(self, stem: str) -> Iterator[tuple[str, str]]
+    prefixes: tuple[str, ...]           # property: the prefixes in force, in lookup order
+    def name(self, name: str) -> str
+    def find(self, *names: str) -> tuple[str, str] | None
+    def get(self, *names: str) -> str | None
+    def family(self, stem: str) -> Iterator[tuple[str, str, str]]
 PREFIX_VAR = "SYSHTTP_PREFIX"
-DEFAULT_PREFIX = "SYSHTTP"
 ```
 
-- `prefix=None` reads `SYSHTTP_PREFIX` at every lookup. A value that is
-  empty or whitespace counts as unset.
-- `prefix=""` turns the package's own settings off: `name()` and `get()`
-  return `None`, no hook is read, and only conventional variables count.
-  This is available only as an argument.
-- A prefix is letters, digits and single inner underscores, starting with a
-  letter. It is upper-cased. `HTTP` and any prefix starting `HTTP_` are
-  refused (CGI exports request headers as `HTTP_*`, so a client would choose
-  the settings and the hooks); `HTTPX` is fine. A malformed or refused
-  argument raises `ValueError` in the constructor. A malformed or refused
-  `SYSHTTP_PREFIX` raises `ValueError` naming it at the first lookup.
+- `SYSHTTP_PREFIX=MYTOOL_` reads `MYTOOL_SYSHTTP_PROXY`, `MYTOOL_HTTPS_PROXY`,
+  `MYTOOL_CA_BUNDLE` and so on, and nothing unprefixed: a tool opts out of
+  the defaults. `MYTOOL_:` reads `MYTOOL_<NAME>` first, then `<NAME>`: a tool
+  layers its own settings over them. `SYSHTTP_PREFIX` itself has no prefix.
+- `prefixes=None` reads `SYSHTTP_PREFIX` at every lookup; blank or unset is
+  `("",)`. A string is split at `:`; an iterable is taken as the list; an
+  empty iterable reads nothing. A prefix is letters, digits and underscores
+  (possibly none), upper-cased; one listed twice counts once. A malformed
+  argument raises `ValueError` in the constructor; a malformed
+  `SYSHTTP_PREFIX` raises `ConfigurationError` naming it at the first lookup.
+- A CGI program receives every request header as an `HTTP_*` variable, so a
+  client could set `HTTP_PROXY`, `HTTP_PROXY_AUTH` and the like: under CGI,
+  set a prefix list without the empty entry.
 - `environ` isolates an instance: two `HTTPEnv`s with different prefixes or
   mappings never see each other's settings.
-- `get(setting)` returns the stripped value of `name(setting)`, or `None`
-  when unset or empty. `conventional(*names)` does the same for the first set
-  variable among `names`, read unprefixed.
-- `family(stem)` yields `(rest, value)` for every variable named
-  `<P>_<stem><rest>` whose value is not blank (stripped, as `get` strips), in
-  name order.
+- `find(*names)` returns `(variable, value)` for the first of `names` set
+  under the first prefix that has one (every name tried under a prefix before
+  the next prefix), the value stripped; `None` when none is. `get` returns
+  the value only. `name(name)` is `name` under the first prefix: what a
+  message names when nothing is set, and what a child process is given.
+- `family(stem)` yields `(rest, value, variable)` for every variable named
+  `<PREFIX><stem><rest>` with a non-empty `rest` and a value that is not
+  blank, the first prefix winning for a `rest` (compared upper-cased).
 
 Every function below that reads a setting takes `env: HTTPEnv | None = None`
 (keyword-only) and uses `HTTPEnv()` when it is `None`.
@@ -91,7 +100,7 @@ def proxy_type(*, env=None) -> tuple[str, str | None]
 NoReachableProxyError = proxylib.NoReachableProxyError
 SYSTEM_PROXY_MAX_AGE = 60
 PROXY = "PROXY"; PROXY_AUTH = "PROXY_AUTH"; PROXY_AUTH_HEADER = "PROXY_AUTH_HEADER"
-PROXY_TYPE = "PROXY_TYPE"; SYSTEM_PROXY = "SYSTEM_PROXY"   # setting names, as `<P>_<NAME>`
+PROXY_TYPE = "PROXY_TYPE"; SYSTEM_PROXY = "SYSTEM_PROXY"   # setting names, as `SYSHTTP_<NAME>`
 DEFAULT_AUTH_HEADER = "Proxy-Authorization"; MACHINE_AUTH_VAR = "HTTP_PROXY_AUTH"
 ```
 
@@ -100,13 +109,13 @@ DEFAULT_AUTH_HEADER = "Proxy-Authorization"; MACHINE_AUTH_VAR = "HTTP_PROXY_AUTH
   tuple of entries to try in order, `None` for DIRECT:
   1. `NO_PROXY` / `no_proxy` hosts: DIRECT (proxylib's `BypassRules`:
      suffixes, CIDR, ports, `*`; loopback always).
-  2. `<P>_PROXY` (`configured_proxy()`), alone.
+  2. `SYSHTTP_PROXY` (`configured_proxy()`), alone.
   3. Else the machine's proxy: when any of `HTTP_PROXY`, `HTTPS_PROXY`,
      `FTP_PROXY`, `WS_PROXY`, `WSS_PROXY`, `ALL_PROXY` is set (either case),
      those variables alone decide, per scheme (proxylib's `EnvProxyConfig`:
-     lowercase first, an uppercase `HTTP_PROXY` ignored under CGI, a PAC
-     result such as `PROXY a:1; DIRECT` read as a list); else the system's
-     configuration for the URL (`system_map()`), unless `<P>_SYSTEM_PROXY`
+     the lowercase spelling first under each prefix, a PAC result such as
+     `PROXY a:1; DIRECT` read as a list); else the system's
+     configuration for the URL (`system_map()`), unless `SYSHTTP_SYSTEM_PROXY`
      is off. `HTTP_PROXY_AUTH`, when set, is every such proxy's
      `Proxy-Authorization` (SOCKS entries excepted).
   4. Else DIRECT.
@@ -115,19 +124,19 @@ DEFAULT_AUTH_HEADER = "Proxy-Authorization"; MACHINE_AUTH_VAR = "HTTP_PROXY_AUTH
   replaces `NO_PROXY`, the variables' own included; listing `<-loopback>`
   turns proxylib's implicit loopback bypass off, as curl has none. `proxy_user` (`-U user:password`) becomes the
   credential of whichever proxy answers.
-- A malformed `<P>_PROXY`, `<P>_PROXY_TYPE` or `<P>_PROXY_AUTH_HEADER`
+- A malformed `SYSHTTP_PROXY`, `SYSHTTP_PROXY_TYPE` or `SYSHTTP_PROXY_AUTH_HEADER`
   raises `ConfigurationError` (proxylib's `ProxyParseError` for a URL) at
-  lookup, only when `<P>_PROXY` is set (the header name only when
-  `<P>_PROXY_AUTH` is too); a bad `<P>_SYSTEM_PROXY` only when the system
+  lookup, only when `SYSHTTP_PROXY` is set (the header name only when
+  `SYSHTTP_PROXY_AUTH` is too); a bad `SYSHTTP_SYSTEM_PROXY` only when the system
   would be asked.
-- `configured_proxy()` is `<P>_PROXY` as a proxylib `Proxy` (a bare
-  `host:port` is `http`). Its credential is `<P>_PROXY_AUTH`, a header value
-  sent verbatim in `auth_header()` (`<P>_PROXY_AUTH_HEADER`, default
+- `configured_proxy()` is `SYSHTTP_PROXY` as a proxylib `Proxy` (a bare
+  `host:port` is `http`). Its credential is `SYSHTTP_PROXY_AUTH`, a header value
+  sent verbatim in `auth_header()` (`SYSHTTP_PROXY_AUTH_HEADER`, default
   `Proxy-Authorization`; a value with `:` or whitespace raises `ValueError`)
   in place of the userinfo, else the userinfo as Basic. A credential (this
   or `HTTP_PROXY_AUTH`) containing a CR, LF or NUL raises `ValueError` naming
   the variable, never the value. It goes to that proxy only: a `CONNECT`, or a plain-http request to it, never through the tunnel.
-  `<P>_PROXY_TYPE=prefix[:/endpoint]` (`proxy_type()`) makes it a
+  `SYSHTTP_PROXY_TYPE=prefix[:/endpoint]` (`proxy_type()`) makes it a
   `prefix+http(s)` gateway: the request for `T` goes to
   `<proxy><endpoint>T`, the credential a header of that request.
 - `system_map()` is `proxylib.auto_proxy(environ={})` (the OS resolver --
@@ -156,7 +165,7 @@ def new_session(*, user_agent: str | None = None, proxies: dict | None = None,
                 ssl_context: ssl.SSLContext | None = None,
                 proxy_ssl_context: ssl.SSLContext | None = None,
                 cookie_hosts: Iterable[Iterable[str]] | None = None) -> requests.Session
-COOKIE_HOSTS = "COOKIE_HOSTS"   # setting name, as `<P>_COOKIE_HOSTS`
+COOKIE_HOSTS = "COOKIE_HOSTS"   # setting name, as `SYSHTTP_COOKIE_HOSTS`
 ```
 
 - One transport adapter, `ProxyAdapter` (a subclass of proxylib's
@@ -173,8 +182,9 @@ COOKIE_HOSTS = "COOKIE_HOSTS"   # setting name, as `<P>_COOKIE_HOSTS`
 - `proxies=` given by you is handed to requests unchanged: the map then has
   no opinion, and no syshttp credential is added.
 - `verify=True` verifies through `tls.os_ssl_context()` (the OS verifier)
-  and names no CA file. A path, or `REQUESTS_CA_BUNDLE` / `CURL_CA_BUNDLE`,
-  names a bundle. `verify=False` is left to requests.
+  and names no CA file. A path, or the `CA_BUNDLE` setting (read at each
+  request), names a bundle; requests' own `REQUESTS_CA_BUNDLE` /
+  `CURL_CA_BUNDLE` are not read. `verify=False` is left to requests.
 - A client certificate passed as `cert=` (a path, or a `(certificate, key)`
   pair) with `verify=True` is loaded into a context of the session's own,
   cached per file and modification time, never into the shared OS context
@@ -185,11 +195,11 @@ COOKIE_HOSTS = "COOKIE_HOSTS"   # setting name, as `<P>_COOKIE_HOSTS`
   held in an OS keystore), ciphers and protocol versions decide. The session
   never changes it. Beside it, `verify` must stay `True`, or `new_session`
   raises `ValueError`; so does a request-level `verify=` (`False`, or a
-  bundle other than the one `REQUESTS_CA_BUNDLE` / `CURL_CA_BUNDLE` name),
-  which includes `fetch.request_text(verify=...)`. A non-`SSLContext` raises
+  bundle), which includes `fetch.request_text(verify=...)`. A non-`SSLContext` raises
   `TypeError`. `proxy_ssl_context` does the same for the TLS to an `https://`
   proxy and to an `https://` URL-prefix gateway: the gateway never gets
-  `ssl_context` or a client certificate meant for the origin (without
+  `ssl_context` or a client certificate meant for the origin, and
+  `CA_BUNDLE` is not consulted (without
   `proxy_ssl_context`, the system's verifier).
   The `sslcontext` package builds such contexts (keystore identities,
   PEM/PKCS#12 from memory), but any `ssl.SSLContext` works.
@@ -200,7 +210,7 @@ COOKIE_HOSTS = "COOKIE_HOSTS"   # setting name, as `<P>_COOKIE_HOSTS`
   `Authorization` header or `auth=` wins. A token containing a CR, LF or NUL
   raises `ValueError` naming the jar key, never the value.
 - `cookie_hosts`: groups of hosts the user declares to be one for cookies
-  (`cookies.host_aliases`); default `<P>_COOKIE_HOSTS`, read when the session
+  (`cookies.host_aliases`); default `SYSHTTP_COOKIE_HOSTS`, read when the session
   is built (groups split by `;`, hosts by `,`:
   `app.example.com,app.example.net;wiki,wiki.corp.example`); `[]` for none.
   A malformed variable raises `ConfigurationError` naming it; a malformed
@@ -243,13 +253,13 @@ class ResponseError(SysHTTPError, ValueError)
   requests' own errors (`NoReachableProxyError`, `ProxyParseError`,
   `requests.exceptions.*`) pass through as they are.
 - `ConfigurationError`: a setting or stored credential that cannot be used
-  (a malformed `<P>_PROXY_TYPE`, a regular expression that does not compile,
+  (a malformed `SYSHTTP_PROXY_TYPE`, a regular expression that does not compile,
   a hook that cannot be loaded, a token with a line break, a malformed
   `SYSHTTP_PREFIX`). The message names the variable or key, never a secret.
 - `HookError`: a `_PY` hook failed; the hook's own exception is `__cause__`.
 - `ResponseError`: a body that is not the JSON `request_json` was asked for.
 - A caller's own mistake is a plain `ValueError` or `TypeError`, not one of
-  these: a malformed `prefix=` argument, `verify=False` beside `ssl_context`,
+  these: a malformed `prefixes=` argument, `verify=False` beside `ssl_context`,
   `cert=` beside `ssl_context`, an unknown patch target.
 
 ## Fetch helpers (`syshttp.fetch`, extra `session`)
@@ -290,7 +300,7 @@ class MemoryTokenJar(dict)
 class CookieJar(Protocol); class TokenJar(Protocol)   # __getitem__, __setitem__, get
 ```
 
-- `store_root()` returns `<P>_HOME` (a leading `~` expanded), else
+- `store_root()` returns `SYSHTTP_HOME` (a leading `~` expanded), else
   `default_root()`: a directory `syshttp` under `%LOCALAPPDATA%` (Windows),
   `~/Library/Application Support` (macOS) or `$XDG_STATE_HOME` /
   `~/.local/state` (elsewhere).
@@ -379,9 +389,9 @@ MAX_COOKIE_AGE = 400 * 24 * 3600
 ## URL hooks (`syshttp.hooks`)
 
 ```
-<P>_HOOKS_<KEY>=<regex>                re.search against the caller's URL
-<P>_HOOKS_<KEY>_PY=<module:callable>   syshttp calls callable(session, method, url, kwargs)
-<P>_HOOKS_<KEY>_CURL=<command>         a curl front end runs this in its place, its argv appended
+SYSHTTP_HOOKS_<KEY>=<regex>                re.search against the caller's URL
+SYSHTTP_HOOKS_<KEY>_PY=<module:callable>   syshttp calls callable(session, method, url, kwargs)
+SYSHTTP_HOOKS_<KEY>_CURL=<command>         a curl front end runs this in its place, its argv appended
 ```
 
 ```python
@@ -403,7 +413,7 @@ def wrapper_environment(hook: Hook, url: str, entry: str, *, env=None) -> dict[s
 - KEYs are compared without regard to case (`Hook.key` is upper-case, as
   Windows holds variable names): `HOOKS_mykey` and `HOOKS_MYKEY` are one
   hook, and `HOOK_SKIP=mykey` suppresses it.
-- `<P>_HOOK_SKIP` (a comma list of KEYs) suppresses hooks.
+- `SYSHTTP_HOOK_SKIP` (a comma list of KEYs) suppresses hooks.
 - `load_callable` accepts `module:attr` or `<file>.py:attr` (`attr` may be
   dotted). A file is loaded once per process, by its resolved path, as a
   `module` is imported once: its module-level state lives on between requests
@@ -414,9 +424,9 @@ def wrapper_environment(hook: Hook, url: str, entry: str, *, env=None) -> dict[s
 - `curl_command` splits a shell-quoted command line. Backslashes are
   literal, a bare existing path is one program, and a leading `.py` runs
   under `python`.
-- `wrapper_environment` returns the `<P>_HOOK_URL`, `<P>_HOOK_KEY`,
-  `<P>_HOOK_CURL` and `<P>_HOOK_SKIP` (this KEY added) variables a `_CURL`
-  wrapper run needs. It returns `{}` under the prefix `""`.
+- `wrapper_environment` returns the `SYSHTTP_HOOK_URL`, `SYSHTTP_HOOK_KEY`,
+  `SYSHTTP_HOOK_CURL` and `SYSHTTP_HOOK_SKIP` (this KEY added) variables a
+  `_CURL` wrapper run needs, each under the first prefix.
 
 ## TLS and retry (`syshttp.tls`, `syshttp.retry`)
 
@@ -465,10 +475,10 @@ def patched() -> tuple[str, ...]
 ```
 
 - `SYSHTTP_IMPORTPATCH` patches client libraries as they are imported, in
-  any program run by an interpreter of the environment. Under a prefix of a
-  tool's own the variable is `<PREFIX>_SYSHTTP_IMPORTPATCH`
-  (`SYSHTTP_PREFIX=AGENTS`: `AGENTS_SYSHTTP_IMPORTPATCH`); under the default
-  prefix or `""` it is `SYSHTTP_IMPORTPATCH` (`setting_name()`). Values:
+  any program run by an interpreter of the environment. It is read under the
+  prefixes like every setting (`SYSHTTP_PREFIX=AGENTS_`:
+  `AGENTS_SYSHTTP_IMPORTPATCH`; `setting_name()` is the variable found, else
+  the name under the first prefix). Values:
   `1`/`true`/`yes`/`on` for every target, `0`/`false`/`no`/`off`, empty or
   unset for none, else target names separated by `:` (`requests:httpx`;
   `urllib.request` means `urllib`). An unknown name is
@@ -523,43 +533,41 @@ def patched() -> tuple[str, ...]
 
 | Variable | Sets | Default |
 | --- | --- | --- |
-| `SYSHTTP_PREFIX` | the prefix `<P>` of every variable below | `SYSHTTP` |
-| `<P>_PROXY` | the proxy URL (`http://`, `https://`, or a bare `host:port`) | the request's scheme's `*_PROXY` variable, else `ALL_PROXY` (lowercase first); with none set, the system's configuration for the URL |
-| `<P>_SYSTEM_PROXY` | whether the system's proxy configuration is consulted (boolean) | on |
-| `<P>_PROXY_AUTH` | **secret**: `<P>_PROXY`'s credential, a header value sent verbatim | the URL's userinfo as Basic |
+| `SYSHTTP_PREFIX` | the prefixes every variable below is read under, `:`-separated, in order; read as written | none (the names as written) |
+| `SYSHTTP_PROXY` | the proxy URL (`http://`, `https://`, or a bare `host:port`) | the request's scheme's `*_PROXY` variable, else `ALL_PROXY` (lowercase first); with none set, the system's configuration for the URL |
+| `SYSHTTP_SYSTEM_PROXY` | whether the system's proxy configuration is consulted (boolean) | on |
+| `SYSHTTP_PROXY_AUTH` | **secret**: `SYSHTTP_PROXY`'s credential, a header value sent verbatim | the URL's userinfo as Basic |
 | `HTTP_PROXY_AUTH` | **secret**: the machine's proxy's credential (a `*_PROXY` variable's or the system's), as `Proxy-Authorization` | the URL's userinfo as Basic |
-| `<P>_PROXY_AUTH_HEADER` | the header name `<P>_PROXY_AUTH` rides in | `Proxy-Authorization` |
-| `<P>_PROXY_TYPE` | `connect` or `prefix[:/endpoint]` | `connect` |
-| `<P>_HOME` | the jar root | the per-user state directory |
-| `<P>_COOKIE_HOSTS` | groups of hosts that share cookies: hosts split by `,`, groups by `;` (`new_session`) | none |
-| `SYSHTTP_IMPORTPATCH` (`<PREFIX>_SYSHTTP_IMPORTPATCH` under a prefix of its own) | which client libraries are patched on import (`1` for all, or `:`-separated names: `requests`, `urllib`, `httpx`, `aiohttp`, `pip`) | none |
-| `<P>_HOOKS_<KEY>` (+ `_PY`, `_CURL`) | a URL hook | none |
-| `<P>_HOOK_SKIP` | KEYs of hooks not to run, comma list | none |
+| `SYSHTTP_PROXY_AUTH_HEADER` | the header name `SYSHTTP_PROXY_AUTH` rides in | `Proxy-Authorization` |
+| `SYSHTTP_PROXY_TYPE` | `connect` or `prefix[:/endpoint]` | `connect` |
+| `SYSHTTP_HOME` | the jar root | the per-user state directory |
+| `SYSHTTP_COOKIE_HOSTS` | groups of hosts that share cookies: hosts split by `,`, groups by `;` (`new_session`) | none |
+| `SYSHTTP_IMPORTPATCH` | which client libraries are patched on import (`1` for all, or `:`-separated names: `requests`, `urllib`, `httpx`, `aiohttp`, `pip`) | none |
+| `SYSHTTP_HOOKS_<KEY>` (+ `_PY`, `_CURL`) | a URL hook | none |
+| `SYSHTTP_HOOK_SKIP` | KEYs of hooks not to run, comma list | none |
+| `HTTP_PROXY`, `HTTPS_PROXY`, `FTP_PROXY`, `WS_PROXY`, `WSS_PROXY`, `ALL_PROXY` (either case, lowercase first) | the machine's proxy, per scheme | none |
 | `NO_PROXY` / `no_proxy` | hosts that go direct | none |
+| `CA_BUNDLE` | the CA bundle a session's `verify=True` uses | the OS verifier |
 
-Read too, under their own names:
+Each of these is read under every prefix of `SYSHTTP_PREFIX`. A `_CURL`
+hook's wrapper runs with `SYSHTTP_HOOK_URL`, `SYSHTTP_HOOK_KEY`,
+`SYSHTTP_HOOK_CURL` and `SYSHTTP_HOOK_SKIP` set under the first prefix
+(`hooks.wrapper_environment`); a curl front end reads them back.
 
-| Variable | Read by | For |
-| --- | --- | --- |
-| `http_proxy`, `https_proxy`, `ftp_proxy`, `ws_proxy`, `wss_proxy`, `all_proxy` (either case) | the proxy map (proxylib's `EnvProxyConfig`) | the machine's proxy, per scheme |
-| `REQUEST_METHOD` | the proxy map | set means CGI: an uppercase `HTTP_PROXY` is then a request header, ignored |
-| `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` | `new_session` (and requests) | a CA bundle named in the environment |
-| `LOCALAPPDATA` (Windows), `XDG_STATE_HOME` (Linux and other POSIX) | `jar.default_root` | the per-user state directory |
-| `IMPORTPATCH_DISABLE` | importpatch | `1` turns every import-time patch off |
-| `PROXYLIB_IMPORTPATCH`, `PROXYLIB_AUTOPROXY` | proxylib | proxylib's own patching, beside syshttp's |
-
-A `_CURL` hook's wrapper runs with `<P>_HOOK_URL`, `<P>_HOOK_KEY`,
-`<P>_HOOK_CURL` and `<P>_HOOK_SKIP` set (`hooks.wrapper_environment`); a curl
-front end reads them back.
+Read as written, never prefixed: `LOCALAPPDATA` (Windows) and
+`XDG_STATE_HOME` (Linux and other POSIX) for the per-user state directory;
+importpatch's `IMPORTPATCH_DISABLE` (`1` turns every import-time patch off);
+proxylib's own `PROXYLIB_IMPORTPATCH` and `PROXYLIB_AUTOPROXY`.
 
 ## Gotchas
 
 - With no proxy variable set, the system's configuration routes requests:
   on a machine with a corporate PAC script, traffic goes where the browser's
-  would. `<P>_SYSTEM_PROXY=0` stops that.
-- `SYSHTTP_PREFIX=MYTOOL` renames every setting. `SYSHTTP_PROXY` is then
-  ignored and `MYTOOL_PROXY` is read.
-- A malformed `<P>_PROXY_TYPE` is harmless until `<P>_PROXY` is set.
+  would. `SYSHTTP_SYSTEM_PROXY=0` stops that.
+- `SYSHTTP_PREFIX=MYTOOL_` reads `MYTOOL_<NAME>` only: `SYSHTTP_PROXY` and
+  the machine's `HTTPS_PROXY` are then ignored. Add the empty entry
+  (`MYTOOL_:`) to fall back to them.
+- A malformed `SYSHTTP_PROXY_TYPE` is harmless until `SYSHTTP_PROXY` is set.
 - Pass `root=` to keep jar files out of the user's state directory.
 - A client certificate loaded into the context you pass is used for every
   https host the session talks to, redirects included. Give a session an

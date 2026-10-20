@@ -1,64 +1,68 @@
 # Settings
 
-Every setting is the environment variable `<P>_<NAME>`. `<P>` is the prefix:
-the `prefix` given to an `HTTPEnv`, else `SYSHTTP_PREFIX`, else `SYSHTTP`. A
-setting given as an argument wins over its variable, and the variable wins
-over the built-in default. Variables are read when they are needed, never at
-import.
+Every setting is an environment variable with a full name: syshttp's own
+carry `SYSHTTP_`, the conventional ones keep theirs. Each is read as
+`<PREFIX><NAME>` for every prefix of `SYSHTTP_PREFIX` in turn (a
+`:`-separated list, used literally), the first one set winning, each name on
+its own. With `SYSHTTP_PREFIX` blank or unset there is one empty prefix: the
+names as written below. A setting given as an argument wins over its
+variable, and the variable wins over the built-in default. Variables are
+read when they are needed, never at import.
 
 | Variable | Sets | Default |
 | --- | --- | --- |
-| `SYSHTTP_PREFIX` | the prefix of every variable below | `SYSHTTP` |
-| `<P>_PROXY` | the proxy URL | the request's scheme's `*_PROXY` variable, else `ALL_PROXY` (lowercase first); with none set, the system's configuration for the URL |
-| `<P>_SYSTEM_PROXY` | whether the system's proxy configuration is consulted (`0`/`false`/`no`/`off` to stop) | on |
-| `<P>_PROXY_AUTH` | `<P>_PROXY`'s credential, a header value sent verbatim to it only (a secret) | the URL's userinfo as Basic |
+| `SYSHTTP_PREFIX` | the prefixes every variable below is read under, in order; itself read as written | none |
+| `SYSHTTP_PROXY` | the proxy URL | the request's scheme's `*_PROXY` variable, else `ALL_PROXY` (lowercase first); with none set, the system's configuration for the URL |
+| `SYSHTTP_SYSTEM_PROXY` | whether the system's proxy configuration is consulted (`0`/`false`/`no`/`off` to stop) | on |
+| `SYSHTTP_PROXY_AUTH` | `SYSHTTP_PROXY`'s credential, a header value sent verbatim to it only (a secret) | the URL's userinfo as Basic |
+| `SYSHTTP_PROXY_AUTH_HEADER` | the header `SYSHTTP_PROXY_AUTH` rides in | `Proxy-Authorization` |
+| `SYSHTTP_PROXY_TYPE` | `connect`, or `prefix[:/endpoint]` for a URL-prefix gateway | `connect` |
+| `SYSHTTP_HOME` | the directory of the cookie and token jars | the per-user state directory |
+| `SYSHTTP_COOKIE_HOSTS` | groups of hosts that share cookies: hosts split by `,`, groups by `;` | none |
+| `SYSHTTP_IMPORTPATCH` | client libraries patched as they are imported to use the system proxy and TLS: `1` for all, or `:`-separated names from `requests`, `urllib`, `httpx`, `aiohttp`, `pip` | none |
+| `SYSHTTP_HOOKS_<KEY>` | a URL hook's pattern; `_PY` and `_CURL` name its targets | none |
+| `SYSHTTP_HOOK_SKIP` | KEYs of hooks not to run | none |
+| `HTTP_PROXY`, `HTTPS_PROXY`, `FTP_PROXY`, `WS_PROXY`, `WSS_PROXY`, `ALL_PROXY` | the machine's proxy, per scheme (either case, lowercase first) | none |
 | `HTTP_PROXY_AUTH` | the machine's proxy's credential (a `*_PROXY` variable's or the system's), sent as `Proxy-Authorization` (a secret) | the URL's userinfo as Basic |
-| `<P>_PROXY_AUTH_HEADER` | the header `<P>_PROXY_AUTH` rides in | `Proxy-Authorization` |
-| `<P>_PROXY_TYPE` | `connect`, or `prefix[:/endpoint]` for a URL-prefix gateway | `connect` |
-| `<P>_HOME` | the directory of the cookie and token jars | the per-user state directory |
-| `<P>_COOKIE_HOSTS` | groups of hosts that share cookies: hosts split by `,`, groups by `;` | none |
-| `SYSHTTP_IMPORTPATCH` | client libraries patched as they are imported to use the system proxy and TLS: `1` for all, or `:`-separated names from `requests`, `urllib`, `httpx`, `aiohttp`, `pip`. Not `<P>_IMPORTPATCH`: under a prefix of a tool's own it is `<P>_SYSHTTP_IMPORTPATCH`, under the default or empty prefix `SYSHTTP_IMPORTPATCH` | none |
-| `<P>_HOOKS_<KEY>` | a URL hook's pattern; `_PY` and `_CURL` name its targets | none |
-| `<P>_HOOK_SKIP` | KEYs of hooks not to run | none |
 | `NO_PROXY` / `no_proxy` | hosts that never go through the proxy | none |
+| `CA_BUNDLE` | the CA bundle a session's `verify=True` uses; requests' `REQUESTS_CA_BUNDLE` / `CURL_CA_BUNDLE` are not read | the OS verifier |
 
-### Read under their own names
+A `_CURL` hook's wrapper runs with `SYSHTTP_HOOK_URL`, `SYSHTTP_HOOK_KEY`,
+`SYSHTTP_HOOK_CURL` and `SYSHTTP_HOOK_SKIP` set under the first prefix; a
+curl front end reads them back.
 
-| Variable | Read by | For |
-| --- | --- | --- |
-| `http_proxy`, `https_proxy`, `ftp_proxy`, `ws_proxy`, `wss_proxy`, `all_proxy` (either case) | the proxy map (proxylib's `EnvProxyConfig`) | the machine's proxy, per scheme |
-| `REQUEST_METHOD` | the proxy map | set means CGI: an uppercase `HTTP_PROXY` is then a request header, ignored |
-| `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` | `new_session` (and requests) | a CA bundle named in the environment |
-| `LOCALAPPDATA` (Windows), `XDG_STATE_HOME` (Linux and other POSIX) | `jar.default_root` | the per-user state directory |
-| `IMPORTPATCH_DISABLE` | importpatch | `1` turns every import-time patch off |
-| `PROXYLIB_IMPORTPATCH`, `PROXYLIB_AUTOPROXY` | proxylib | proxylib's own patching, beside syshttp's |
+Read as written, never prefixed: `LOCALAPPDATA` (Windows) and
+`XDG_STATE_HOME` (Linux and other POSIX) for the per-user state directory,
+importpatch's `IMPORTPATCH_DISABLE`, and proxylib's own
+`PROXYLIB_IMPORTPATCH` and `PROXYLIB_AUTOPROXY`.
 
-A `_CURL` hook's wrapper runs with `<P>_HOOK_URL`, `<P>_HOOK_KEY`,
-`<P>_HOOK_CURL` and `<P>_HOOK_SKIP` set (`hooks.wrapper_environment`); a curl
-front end reads them back.
+## Prefixes
 
-## One prefix per tool
-
-A tool that embeds syshttp can give it a namespace of its own:
+A tool that embeds syshttp opts out of the defaults with a prefix of its own:
 
 ```sh
-SYSHTTP_PREFIX=MYTOOL MYTOOL_PROXY=http://proxy.internal:3128 mytool ...
+SYSHTTP_PREFIX=MYTOOL_ MYTOOL_HTTPS_PROXY=http://proxy.internal:3128 mytool ...
 ```
+
+reads `MYTOOL_HTTPS_PROXY`, `MYTOOL_SYSHTTP_HOME`, `MYTOOL_CA_BUNDLE` and so
+on, and ignores the machine's `HTTPS_PROXY`. With the empty entry last,
+`SYSHTTP_PREFIX=MYTOOL_:`, each variable falls back to its unprefixed name:
+`MYTOOL_HTTPS_PROXY` over `HTTPS_PROXY`, while an unset `MYTOOL_NO_PROXY`
+leaves the machine's `NO_PROXY` in force.
 
 Inside one process, separate configurations use separate `HTTPEnv` objects:
 
 ```python
 from syshttp import HTTPEnv, proxy
 
-corp = HTTPEnv("CORP")                       # CORP_PROXY, CORP_PROXY_AUTH, ...
-lab = HTTPEnv("LAB", environ={"LAB_PROXY": "http://lab:8080"})
+corp = HTTPEnv("CORP_")                      # CORP_SYSHTTP_PROXY, CORP_HTTPS_PROXY, ...
+lab = HTTPEnv("LAB_", environ={"LAB_SYSHTTP_PROXY": "http://lab:8080"})
 proxy.proxy_map(env=corp), proxy.proxy_map(env=lab)
 ```
 
-`HTTPEnv("")` reads only the conventional variables (the `*_PROXY` family,
-`NO_PROXY`, `HTTP_PROXY_AUTH`): no package setting and no hook. There is no
-default without a prefix, because CGI exports every request header as an
-`HTTP_*` variable, and a hook setting names code to import.
+A CGI program receives every request header as an `HTTP_*` variable, so a
+client could set `HTTP_PROXY` or `HTTP_PROXY_AUTH`: under CGI, set a prefix
+list without the empty entry.
 
 ## Hosts that share cookies
 
