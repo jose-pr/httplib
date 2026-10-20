@@ -15,8 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   deadline, user_agent, env, proxymap, ssl_context, proxy_ssl_context, verify,
   cookies, tokens, auth_provider, retries, backoff, status_forcelist,
   cookie_hosts)` sends through a transport and follows redirects with one rule
-  for credentials (`Authorization` goes to the origin it was given for and to no
-  other scheme, host or port). The default `HTTPTransport` (on `http.client`,
+  for credentials (`Authorization`, `Cookie` and `Proxy-Authorization` go to the
+  origin they were given for and to no other scheme, host or port). The default `HTTPTransport` (on `http.client`,
   with a per-thread connection pool, framed bodies, `gzip` / `deflate`
   decoding and a bounded reply size) routes every request and redirect hop by
   `proxy.proxy_map(env=env)` (or `proxymap=`): the first entry that accepts a
@@ -293,6 +293,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Security
 
+- The client closes six gaps found in review. A `Set-Cookie` with a control
+  character in it is ignored whole (RFC 6265bis 5.6), `load_netscape` ends a
+  line at a newline only (it ended one at `\x0b`, `\x0c`, `\x1c`-`\x1e` and
+  `\x85` too, so a value could become a whole row for another domain),
+  `save_netscape` writes no row with a control character or a tab in a field,
+  and a by-host jar file gives the client only the rows that cover its host or
+  group. A plain-http response can no longer set a Secure cookie, or set,
+  replace or delete one that is stored (RFC 6265bis 5.7; the loopback hosts
+  count as secure, as in curl). A redirect to another scheme, host or port
+  drops a caller's `Cookie` and `Proxy-Authorization` header with
+  `Authorization`. `HTTPTransport.send(stream=False)` and
+  `HTTPResponse.buffered()` hold a decoded reply to `MAX_REPLY_BYTES` (a
+  kilobyte of gzip decoded to tens of megabytes), and the too-large error names
+  the URL as scheme, host, port and path, without its query. An `https:` origin
+  is no longer sent through a plain `prefix+http` gateway, which would carry its
+  tokens and Secure cookies in clear text: the entry is skipped, and with
+  nothing else left the request raises `proxylib.UnsupportedProxyError`.
 - A `Set-Cookie` can no longer name a domain its host does not own. Any
   host could set or delete another host's cookie (`Domain=bank.example` from
   `evil.example`) or one for a top level domain; such a header is now skipped

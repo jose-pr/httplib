@@ -137,7 +137,8 @@ DEFAULT_AUTH_HEADER = "Proxy-Authorization"; MACHINE_AUTH_VAR = "HTTP_PROXY_AUTH
   the variable, never the value. It goes to that proxy only: a `CONNECT`, or a plain-http request to it, never through the tunnel.
   `SYSHTTP_PROXY_TYPE=prefix[:/endpoint]` (`proxy_type()`) makes it a
   `prefix+http(s)` gateway: the request for `T` goes to
-  `<proxy><endpoint>T`, the credential a header of that request.
+  `<proxy><endpoint>T`, the credential a header of that request. `syshttp.client`
+  does not send an `https:` origin through a plain `prefix+http` gateway.
 - `system_map()` is `proxylib.auto_proxy(environ={})` (the OS resolver --
   WinHTTP, CFNetwork, libproxy -- then the OS settings, PAC and WPAD
   included), built once per `SYSTEM_PROXY_MAX_AGE` seconds, each URL's
@@ -220,9 +221,10 @@ DEFAULT_TRANSPORT = "SYSHTTP_DEFAULT_TRANSPORT"      # setting names
   `303` becomes a `GET`); `allow_redirects=False` returns the first answer. A
   redirect whose `Location` is missing or cannot be requested is
   `OSError(EIO)`. A redirect that changes the scheme, host or port drops
-  `Authorization` for that hop and every later one, and nothing else: every
-  other header, a `Cookie` the caller named included, goes to the new host as
-  well, so keep a secret in `Authorization`. Every other method is sent without
+  `Authorization`, `Cookie` and `Proxy-Authorization` for that hop and every
+  later one (the jar's cookies are chosen again for each hop), and nothing
+  else: every other header goes to the new host as well, so keep a secret in
+  one of those three. Every other method is sent without
   following: a 307 or 308 (for `PROPFIND` also a 301, 302 or 303) to the same
   scheme, host and port is sent once more with the same method, headers and
   body, and any other 3xx, a redirect to another origin or a second redirect
@@ -240,7 +242,10 @@ DEFAULT_TRANSPORT = "SYSHTTP_DEFAULT_TRANSPORT"      # setting names
   an `http:` origin and a `CONNECT` for an `https:` one, an `https:` proxy
   over TLS and the origin's TLS inside it; a `prefix+http(s)` gateway gets
   `<gateway><path><URL>` with its credential as a header of that request, and
-  the response keeps the URL asked for. A proxy's headers (its credential) go
+  the response keeps the URL asked for; a plain `prefix+http` gateway is not
+  offered an `https:` origin, whose tokens and Secure cookies would cross it in
+  clear text: the entry is skipped like a SOCKS one, and with nothing else left
+  the request is `proxylib.UnsupportedProxyError`. A proxy's headers (its credential) go
   to the proxy only: in the `CONNECT`, or on the plain-http request to it,
   never through a tunnel. SOCKS entries are skipped; an answer with nothing
   else is `proxylib.UnsupportedProxyError`. A map with no opinion for a URL
@@ -276,7 +281,12 @@ DEFAULT_TRANSPORT = "SYSHTTP_DEFAULT_TRANSPORT"      # setting names
   host, a jar object is used as given. A host's rows are loaded from the jar
   the first time the host is asked for, and written back only when they differ
   from what was loaded or written last; a jar that fails to read or write is
-  ignored. `cookie_hosts` (default `SYSHTTP_COOKIE_HOSTS`, read when the client
+  ignored. A by-host file gives its host (or group) only the rows whose domain
+  covers it; a named key holds every row. A `Set-Cookie` with a control
+  character (the tab apart) is ignored whole. A Secure cookie from plain http
+  (the loopback hosts apart, as curl has it) is ignored, and plain http cannot
+  set, replace or delete a stored Secure cookie of the same name whose domain
+  (either containing the other) and path match (RFC 6265bis 5.7). `cookie_hosts` (default `SYSHTTP_COOKIE_HOSTS`, read when the client
   is made: groups split by `;`, hosts by `,`:
   `app.example.com,app.example.net;wiki,wiki.corp.example`; `[]` for none)
   declares groups of hosts that are one for cookies (`cookies.host_aliases`):
@@ -356,16 +366,18 @@ def is_redirect(resp): ...
   case, a name sent twice reads as `"a, b"` and `headers.get_all()` lists them;
   `repr()` shows names only), `url` (the URL requested, without fragment, an
   empty path `/`; through a gateway still the URL asked for), `read(size=-1)`,
-  `iter_bytes(chunk_size)`, `buffered()` (reads the rest of the body into
-  memory, closes the connection and returns the response, which stays
-  readable), `close()` and a context manager. A `gzip` or `deflate` body is
+  `iter_bytes(chunk_size)`, `buffered(limit=None)` (reads the rest of the body
+  into memory, closes the connection and returns the response, which stays
+  readable; more than `limit` decoded bytes, default `MAX_REPLY_BYTES`, is
+  `OSError(EFBIG)`), `close()` and a context manager. A `gzip` or `deflate` body is
   decoded, in steps of at most 256 KiB, unless the request named an
   `Accept-Encoding` of its own (`identity` counts as none); `headers` stay as
   received, so `Content-Length` counts the encoded bytes. A body that ends
   before the length the server stated, a chunked body cut short and a coded
   body that is not valid are `OSError(EIO)`, never a shorter read.
   `content` is the rest of the decoded body, read on first use (at most
-  `MAX_REPLY_BYTES`, else `OSError(EFBIG)`) and kept, so `content`, `text()`
+  `MAX_REPLY_BYTES`, else `OSError(EFBIG)` naming the URL as scheme, host,
+  port and path) and kept, so `content`, `text()`
   and `json()` agree however often they are used; bytes already taken with
   `read()` are not in it. `text()` decodes with `encoding`, else the
   `charset` of `Content-Type`, else UTF-8, replacing what does not decode.
@@ -453,7 +465,8 @@ process using syshttp.
   larger than a known length or not a number is `ValueError`, a body that runs
   out first is `OSError(EIO)`). `timeout` is seconds, a `(connect, read)` pair
   or `None`; the read half bounds each wait on the server. With `stream=False`
-  the body has been read when `send()` returns; with `stream=True` it is read
+  the body has been read when `send()` returns (a body that decodes to more
+  than `MAX_REPLY_BYTES` is `OSError(EFBIG)`); with `stream=True` it is read
   from the response, which the caller closes. A transport raises only
   `TimeoutError`, `ConnectionError`, `ssl.SSLError`, `ValueError` (before
   anything is sent: a header or URL with a control character, a URL with
@@ -551,7 +564,7 @@ class CookieJar(Protocol); class TokenJar(Protocol)   # __getitem__, __setitem__
 @dataclass(frozen=True)
 class CookieSpec: domain: str; path: str; secure: bool; expires: int | None; name: str; value: str; http_only: bool = False; subdomains: bool = False
 def load_netscape(path: Path) -> list[CookieSpec]
-def save_netscape(cookies: Iterable[CookieLike], path: Path) -> None
+def save_netscape(session_cookies: Iterable[CookieLike], path: Path) -> None
 def cookie_applies(cookie: CookieSpec, url: str, now: float | None = None) -> bool
 def set_cookie_specs(values: Iterable[str], default_domain: str, now: float | None = None, *,
                      request_path: str = "/",
@@ -564,7 +577,11 @@ MAX_COOKIE_AGE = 400 * 24 * 3600
 
 - `load_netscape` returns `[]` for a missing file, reads `#HttpOnly_` rows,
   keeps a row whose value is empty and treats an unreadable expiry as a
-  session cookie. `save_netscape` writes `#HttpOnly_` rows as curl does.
+  session cookie. Lines end at `\n` only (one trailing `\r` is taken off), so
+  a character `str.splitlines()` ends a line at (`\x0b`, `\x0c`, `\x85`)
+  cannot start a row inside a value; a row whose name or value holds a control
+  character is skipped. `save_netscape` writes `#HttpOnly_` rows as curl does,
+  and writes no row with a control character or a tab in a field.
 - `cookie_applies` decides as curl does: the domain (a subdomain only with a
   leading dot or the include-subdomains flag, and an IP only matches
   itself), the RFC 6265 path match, `Secure` only over https or to loopback,

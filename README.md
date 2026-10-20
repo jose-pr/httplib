@@ -33,7 +33,8 @@ it. Documentation: <https://jose-pr.github.io/syshttp/>.
   (CIDR included), and every redirect hop is decided again.
 - **Prefix gateways** — `SYSHTTP_PROXY_TYPE=prefix:/fetch/` sends
   `GET https://api.example.com/x` to `<proxy>/fetch/https://api.example.com/x`
-  (the client, requests, httpx and urllib). Responses, redirects and cookies still use
+  (the client, requests, httpx and urllib; the client sends an `https:` origin
+  through an `https` gateway only). Responses, redirects and cookies still use
   the caller's URL.
 - **Prefixes of a tool's own** — `SYSHTTP_PREFIX=MYTOOL_` makes the package
   read `MYTOOL_HTTPS_PROXY`, `MYTOOL_SYSHTTP_HOME` and so on instead of the

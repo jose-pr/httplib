@@ -91,7 +91,10 @@ With these set, `GET https://api.example.com/x` is sent to
 `https://gw.example/fetch/https://api.example.com/x`, with the credential as a
 header of that request. Redirects, cookies and `response.url` still use the
 caller's URL. `syshttp.client`, requests, httpx and urllib follow a gateway;
-aiohttp is not offered one (proxylib's `UnsupportedProxyError`).
+aiohttp is not offered one (proxylib's `UnsupportedProxyError`). `syshttp.client`
+does not send an `https:` origin through a plain `prefix+http` gateway, whose
+hop would carry that origin's tokens and Secure cookies in clear text: use an
+`https` gateway.
 
 ## The default transport
 
